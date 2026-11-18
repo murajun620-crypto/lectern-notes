@@ -172,4 +172,19 @@ test('small circles cut only their pixels in wide highlighter; fast sweeps, movi
   await expect.poll(() => alpha(page, 0.5, 0.68)).toBe(0);
   expect(await alpha(page, 0.3, 0.68)).toBeGreaterThan(50);
   expect((await stored(page)).every((p) => p.pages[0].strokes[0].erasures.length === 3)).toBe(true);
+  // Sparse input forms a smooth quadratic well away from the raw control polygon.
+  await page.getByRole('button', { name: '蛍光ペン', exact: true }).click();
+  await page.getByLabel('ペンの太さ', { exact: true }).selectOption('1');
+  const curve = (await page.getByTestId('pdf-page').boundingBox())!;
+  await page.mouse.move(curve.x + curve.width * 0.2, curve.y + curve.height * 0.2);
+  await page.mouse.down();
+  await page.mouse.move(curve.x + curve.width * 0.5, curve.y + curve.height * 0.2);
+  await page.mouse.move(curve.x + curve.width * 0.5, curve.y + curve.height * 0.4);
+  await page.mouse.up();
+  await saved(page);
+  expect(await alpha(page, 0.425, 0.225)).toBeGreaterThan(40);
+  await page.getByRole('button', { name: '消しゴム', exact: true }).click();
+  await page.getByLabel('消しゴムのサイズ', { exact: true }).selectOption('8');
+  await line(page, 0.425, 0.225, 0.425, 0.225, 1);
+  expect(await alpha(page, 0.425, 0.225)).toBe(0);
 });

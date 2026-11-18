@@ -23,6 +23,24 @@ const cut: Erasure = {
   ],
 };
 describe('partial circular eraser', () => {
+  it('also reaches a smoothed curve that bows away from its sparse input segments', () => {
+    const curve = {
+      ...line,
+      tool: 'highlighter' as const,
+      points: [
+        { x: 0, y: 0, p: 0.5 },
+        { x: 100, y: 0, p: 0.5 },
+        { x: 100, y: 100, p: 0.5 },
+      ],
+    };
+    // traceCurve's quadratic passes through (75, 12.5), away from both raw segments.
+    const [result] = applyErasure([curve], {
+      id: 'circle',
+      width: 4,
+      points: [{ x: 75, y: 12.5, p: 0.5 }],
+    });
+    expect(result.erasures).toHaveLength(1);
+  });
   it('catches a fast sweep between sparse samples without changing original ink or pressure', () => {
     const [result] = applyErasure([line], cut);
     expect(result.points).toBe(line.points);
