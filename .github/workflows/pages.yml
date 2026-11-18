@@ -29,12 +29,17 @@ jobs:
           sudo python3 - <<'PY'
           from pathlib import Path
           import re
-          for path in [Path('/etc/apt/sources.list'), Path('/etc/apt/sources.list.d/ubuntu.sources')]:
+          paths = [Path('/etc/apt/sources.list'),
+                   *Path('/etc/apt/sources.list.d').glob('*.list'),
+                   *Path('/etc/apt/sources.list.d').glob('*.sources'),
+                   *Path('/etc/apt').glob('apt-mirrors*.txt')]
+          for path in paths:
               if path.exists():
                   source = path.read_text()
                   source = re.sub(r'https?://(?:[^/\s]+\.)?archive\.ubuntu\.com/ubuntu', 'https://archive.ubuntu.com/ubuntu', source)
                   source = source.replace('http://security.ubuntu.com/ubuntu', 'https://security.ubuntu.com/ubuntu')
                   path.write_text(source)
+                  print(f'Normalized Ubuntu mirrors in {path}')
           PY
       - run: pnpm exec playwright install --with-deps chromium webkit
       - run: pnpm test:e2e

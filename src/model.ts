@@ -1,12 +1,14 @@
 import { getStroke } from 'perfect-freehand';
 export type Tool = 'pen' | 'highlighter' | 'eraser' | 'select' | 'laser' | 'hand';
 export type Point = { x: number; y: number; p: number };
+export type Erasure = { id: string; width: number; points: Point[] };
 export type Stroke = {
   id: string;
   tool: 'pen' | 'highlighter';
   color: string;
   width: number;
   points: Point[];
+  erasures?: Erasure[];
 };
 export type Video = {
   id: string;
@@ -76,10 +78,33 @@ export function segmentDistance(p: Point, a: Point, b: Point) {
   return Math.hypot(p.x - a.x - t * dx, p.y - a.y - t * dy);
 }
 export function strokeHit(stroke: Stroke, point: Point, radius: number) {
-  return stroke.points.some((p, i) =>
-    i
-      ? segmentDistance(point, stroke.points[i - 1], p) <= radius + stroke.width / 2
-      : Math.hypot(point.x - p.x, point.y - p.y) <= radius + stroke.width / 2,
+  return stroke.points.some((b, i) => {
+    const a = stroke.points[Math.max(0, i - 1)],
+      dx = b.x - a.x,
+      dy = b.y - a.y;
+    const t = clamp(((point.x - a.x) * dx + (point.y - a.y) * dy) / (dx * dx + dy * dy || 1), 0, 1);
+    const nearest = { x: a.x + t * dx, y: a.y + t * dy, p: 0.5 };
+    return (
+      Math.hypot(point.x - nearest.x, point.y - nearest.y) <= radius + stroke.width / 2 &&
+      !pointErased(stroke, nearest)
+    );
+  });
+}
+export function translateStroke(stroke: Stroke, dx: number, dy: number): Stroke {
+  const shift = (p: Point) => ({ ...p, x: p.x + dx, y: p.y + dy });
+  return {
+    ...stroke,
+    points: stroke.points.map(shift),
+    ...(stroke.erasures && {
+      erasures: stroke.erasures.map((e) => ({ ...e, points: e.points.map(shift) })),
+    }),
+  };
+}
+export function pointErased(stroke: Stroke, p: Point) {
+  return (
+    stroke.erasures?.some((e) =>
+      e.points.some((b, i) => segmentDistance(p, e.points[Math.max(0, i - 1)], b) < e.width / 2),
+    ) ?? false
   );
 }
 export function penOutline(stroke: Stroke, draft = false) {
@@ -141,11 +166,35 @@ export function drawLaser(
   ctx.stroke();
   ctx.restore();
 }
+/** Separate inverse clips keep overlapping eraser passes transparent. */
+function clipErasures(ctx: CanvasRenderingContext2D, erasures: Erasure[]) {
+  const transform = ctx.getTransform();
+  for (const erasure of erasures) {
+    for (let i = erasure.points.length === 1 ? 0 : 1; i < erasure.points.length; i++) {
+      const a = erasure.points[Math.max(0, i - 1)],
+        b = erasure.points[i];
+      const radius = erasure.width / 2,
+        angle = Math.atan2(b.y - a.y, b.x - a.x);
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.beginPath();
+      ctx.rect(0, 0, ctx.canvas.width, ctx.canvas.height);
+      ctx.setTransform(transform);
+      ctx.moveTo(a.x + Math.sin(angle) * radius, a.y - Math.cos(angle) * radius);
+      ctx.lineTo(b.x + Math.sin(angle) * radius, b.y - Math.cos(angle) * radius);
+      ctx.arc(b.x, b.y, radius, angle - Math.PI / 2, angle + Math.PI / 2);
+      ctx.lineTo(a.x - Math.sin(angle) * radius, a.y + Math.cos(angle) * radius);
+      ctx.arc(a.x, a.y, radius, angle + Math.PI / 2, angle + Math.PI * 1.5);
+      ctx.closePath();
+      ctx.clip('evenodd');
+    }
+  }
+}
 export function drawStrokes(ctx: CanvasRenderingContext2D, strokes: Stroke[], draft = false) {
   for (const stroke of strokes) {
     if (!stroke.points.length) continue;
     // One composited path per highlighter prevents dark joints inside a single stroke.
     ctx.save();
+    if (stroke.erasures?.length) clipErasures(ctx, stroke.erasures);
     ctx.strokeStyle = stroke.color;
     ctx.fillStyle = stroke.color;
     ctx.lineCap = 'round';

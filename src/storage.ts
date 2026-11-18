@@ -45,7 +45,7 @@ export function download(blob: Blob, name: string) {
 }
 export async function exportBackup(p: Project) {
   const zip = new JSZip();
-  zip.file('project.json', JSON.stringify({ format: 'lectern', version: 1, project: p }));
+  zip.file('project.json', JSON.stringify({ format: 'lectern', version: 2, project: p }));
   for (const id of new Set(p.pages.flatMap((pg) => (pg.assetId ? [pg.assetId] : []))))
     zip.file(`assets/${id}.pdf`, await getAsset(id));
   return zip.generateAsync({ type: 'blob', compression: 'STORE' });
@@ -112,6 +112,30 @@ export function validateProject(p: unknown): asserts p is Project {
           !finite(pt.p, 0, 1)
         )
           return fail();
+      if (s.erasures !== undefined) {
+        if (!Array.isArray(s.erasures) || s.erasures.length > 10000) return fail();
+        let count = 0;
+        for (const e of s.erasures) {
+          if (
+            !e ||
+            typeof e.id !== 'string' ||
+            !finite(e.width, 0.00001, 2000) ||
+            !Array.isArray(e.points) ||
+            !e.points.length
+          )
+            return fail();
+          count += e.points.length;
+          if (count > 200000) return fail();
+          for (const pt of e.points)
+            if (
+              !pt ||
+              !finite(pt.x, -20000, 40000) ||
+              !finite(pt.y, -20000, 40000) ||
+              !finite(pt.p, 0, 1)
+            )
+              return fail();
+        }
+      }
     }
     for (const v of pg.videos)
       if (
@@ -142,7 +166,7 @@ export async function importBackup(file: File): Promise<Project> {
   const meta = zip.file('project.json');
   if (!meta) throw new Error('Lecternのバックアップを選択してください。');
   const raw = JSON.parse(await meta.async('string'));
-  if (raw.format !== 'lectern' || raw.version !== 1)
+  if (raw.format !== 'lectern' || ![1, 2].includes(raw.version))
     throw new Error('未対応のバックアップ形式です。');
   validateProject(raw.project);
   const p: Project = raw.project,

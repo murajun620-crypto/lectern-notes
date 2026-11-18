@@ -114,7 +114,8 @@ test('PDF, ink coordinates, undo/redo, eraser, lasso, laser and restart', async 
   await page.getByLabel('表示倍率').selectOption('1');
   await page.getByRole('button', { name: '消しゴム', exact: true }).click();
   await line(page, [0.28, 0.46], [0.32, 0.53]);
-  expect((await stored(page))[0].pages[0].strokes).toHaveLength(1);
+  expect((await stored(page))[0].pages[0].strokes).toHaveLength(2);
+  expect((await stored(page))[0].pages[0].strokes[0].erasures).toHaveLength(1);
   await page.getByRole('button', { name: '元に戻す', exact: true }).click();
   await saved(page);
   await page.getByRole('button', { name: '選択', exact: true }).click();
@@ -294,6 +295,7 @@ test('backup restore, annotated PDF output and library rename/duplicate/delete',
   const data = await readFile((await backup.path())!);
   const zip = await JSZip.loadAsync(data);
   const meta = JSON.parse(await zip.file('project.json')!.async('string'));
+  expect(meta.version).toBe(2);
   expect(meta.project.pages).toHaveLength(3);
   expect(meta.project.pages[0].strokes).toHaveLength(1);
   expect(meta.project.pages[0].videos).toHaveLength(1);
@@ -309,9 +311,14 @@ test('backup restore, annotated PDF output and library rename/duplicate/delete',
   await expect(page.getByRole('heading', { name: '講義資料' })).toBeVisible();
   const chooser = page.waitForEvent('filechooser');
   await page.getByRole('button', { name: 'バックアップを復元' }).click();
+  zip.file('project.json', JSON.stringify({ ...meta, version: 1 }));
   await (
     await chooser
-  ).setFiles({ name: 'backup.lecture.zip', mimeType: 'application/zip', buffer: data });
+  ).setFiles({
+    name: 'backup.lecture.zip',
+    mimeType: 'application/zip',
+    buffer: await zip.generateAsync({ type: 'nodebuffer' }),
+  });
   await expect(page.getByTestId('pdf-page')).toBeVisible();
   await saved(page);
   expect(await stored(page)).toHaveLength(2);

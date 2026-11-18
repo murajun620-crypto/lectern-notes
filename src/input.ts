@@ -7,6 +7,7 @@ export type InputPreferences = {
   twoFingerTap: boolean;
   presets: string[];
   laserWidth: number;
+  eraserWidth: number;
 };
 export const defaultInputPreferences: InputPreferences = {
   fingerInk: false,
@@ -14,6 +15,7 @@ export const defaultInputPreferences: InputPreferences = {
   twoFingerTap: true,
   presets: ['#183e3a', '#cf4d44', '#447cbd'],
   laserWidth: 4,
+  eraserWidth: 28,
 };
 export function loadInputPreferences(): InputPreferences {
   try {
@@ -23,6 +25,7 @@ export function loadInputPreferences(): InputPreferences {
       palmRejection: p.palmRejection !== false,
       twoFingerTap: p.twoFingerTap !== false,
       laserWidth: [2, 4, 6, 8, 12].includes(p.laserWidth) ? p.laserWidth : 4,
+      eraserWidth: [8, 16, 28, 48, 80].includes(p.eraserWidth) ? p.eraserWidth : 28,
       presets:
         Array.isArray(p.presets) &&
         p.presets.length === 3 &&

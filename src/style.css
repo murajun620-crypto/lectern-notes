@@ -1999,3 +1999,20 @@ body,
   font-size: 10px;
   white-space: nowrap;
 }
+.eraser-preview {
+  border: 1px solid #73847b;
+  border-radius: 50%;
+}
+.eraser-cursor {
+  display: none;
+  position: absolute;
+  top: 0;
+  left: 0;
+  border: 1px solid #355e51;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px #fff9;
+  background: #ffffff18;
+  pointer-events: none;
+  z-index: 14;
+  will-change: transform;
+}

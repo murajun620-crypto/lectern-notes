@@ -1,19 +1,30 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 import { Trash2 } from 'lucide-react';
-import { clamp, drawStrokes, drawLaser, pointInPolygon, strokeHit, uid } from './model';
+import {
+  clamp,
+  drawStrokes,
+  drawLaser,
+  pointInPolygon,
+  pointErased,
+  strokeHit,
+  translateStroke,
+  uid,
+} from './model';
 import type { Page, Point, Stroke, Tool, Video } from './model';
 import { renderPage } from './pdf';
 import VideoBox from './VideoBox';
 import { effectiveTool, PalmGuard } from './input';
 import type { PencilTool } from './input';
 import { usePageViewport } from './usePageViewport';
+import { applyErasure } from './eraser';
 type Props = {
   page: Page;
   tool: Tool;
   color: string;
   width: number;
   laserWidth: number;
+  eraserWidth: number;
   fingerInk: boolean;
   pencilTool: PencilTool;
   palmRejection: boolean;
@@ -34,6 +45,7 @@ export default function Stage({
   color,
   width,
   laserWidth,
+  eraserWidth,
   fingerInk,
   pencilTool,
   palmRejection,
@@ -52,7 +64,8 @@ export default function Stage({
     paper = useRef<HTMLDivElement>(null),
     pdfCanvas = useRef<HTMLCanvasElement>(null),
     inkCanvas = useRef<HTMLCanvasElement>(null),
-    laserCanvas = useRef<HTMLCanvasElement>(null);
+    laserCanvas = useRef<HTMLCanvasElement>(null),
+    eraserCursor = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ w: 1000, h: 700 }),
     [loading, setLoading] = useState(true);
   const [selection, setSelection] = useState<string[]>([]),
@@ -74,6 +87,8 @@ export default function Stage({
     stroke?: Stroke;
     selection?: string[];
     result?: Stroke[];
+    erasure?: { id: string; width: number };
+    erased?: Set<string>;
   } | null>(null);
   const touches = useRef(new Map<number, { x: number; y: number }>()),
     pinch = useRef<{ distance: number; zoom: number; anchor: { x: number; y: number } } | null>(
@@ -131,6 +146,28 @@ export default function Stage({
     setZoom,
   });
   const screenScale = () => fit * view.current.zoom;
+  const hideEraser = () => {
+    if (eraserCursor.current) eraserCursor.current.style.display = 'none';
+  };
+  const showEraser = (e: { clientX: number; clientY: number; pointerType: string }) => {
+    const el = eraserCursor.current!;
+    if (
+      effectiveTool(tool, pencilTool, e.pointerType, fingerInk) !== 'eraser' ||
+      (e.pointerType === 'touch' && !fingerInk) ||
+      pinch.current ||
+      nativePinch.current
+    ) {
+      hideEraser();
+      return;
+    }
+    const r = viewport.current!.getBoundingClientRect();
+    el.style.display = 'block';
+    el.style.width = el.style.height = `${eraserWidth}px`;
+    el.style.transform = `translate3d(${e.clientX - r.left - eraserWidth / 2}px, ${e.clientY - r.top - eraserWidth / 2}px, 0)`;
+  };
+  useEffect(() => {
+    hideEraser();
+  }, [tool, eraserWidth, page.id]);
   useLayoutEffect(() => {
     const el = viewport.current!;
     const ro = new ResizeObserver(() => setSize({ w: el.clientWidth, h: el.clientHeight }));
@@ -151,6 +188,7 @@ export default function Stage({
   }, [page.id]);
   useEffect(() => {
     const reset = () => {
+      hideEraser();
       commitView();
       palm.current.reset(performance.now());
       gesture.current = null;
@@ -317,6 +355,7 @@ export default function Stage({
     if (e.pointerType === 'touch') {
       touches.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
       if (touches.current.size === 2) {
+        hideEraser();
         beginView();
         tap.current = {
           ids: new Set(touches.current.keys()),
@@ -371,6 +410,7 @@ export default function Stage({
       else if (selectedTool === 'laser') kind = 'laser';
     }
     if (kind === 'pan') beginView();
+    showEraser(e);
     gesture.current = {
       kind,
       id: e.pointerId,
@@ -395,7 +435,13 @@ export default function Stage({
       setDraft(s);
     }
     if (kind === 'erase') {
-      gesture.current.result = page.strokes.filter((s) => !strokeHit(s, p, 12 / screenScale()));
+      gesture.current.erasure = { id: uid(), width: eraserWidth / screenScale() };
+      gesture.current.erased = new Set();
+      gesture.current.result = applyErasure(
+        page.strokes,
+        { ...gesture.current.erasure, points: [p] },
+        gesture.current.erased,
+      );
       setWorking(gesture.current.result);
     }
     if (kind === 'lasso') {
@@ -405,6 +451,7 @@ export default function Stage({
     if (kind === 'laser') lasers.current.push({ ...p, t: performance.now() });
   };
   const move = (e: ReactPointerEvent) => {
+    showEraser(e);
     const initial = tap.current?.starts.get(e.pointerId);
     if (initial && Math.hypot(e.clientX - initial.x, e.clientY - initial.y) > 12)
       tap.current!.cancelled = true;
@@ -462,8 +509,19 @@ export default function Stage({
       setDraft({ ...g.stroke!, points: [...g.points] });
     }
     if (g.kind === 'erase') {
-      g.points.push(p);
-      g.result = (g.result || g.original).filter((s) => !strokeHit(s, p, 12 / screenScale()));
+      const fromIndex = g.points.length;
+      const samples = e.nativeEvent.getCoalescedEvents?.();
+      for (const sample of samples?.length ? samples : [e.nativeEvent]) {
+        const pt = point(sample),
+          last = g.points.at(-1)!;
+        if (Math.hypot(pt.x - last.x, pt.y - last.y) > 0.25 / screenScale()) g.points.push(pt);
+      }
+      g.result = applyErasure(
+        g.original,
+        { ...g.erasure!, points: [...g.points] },
+        g.erased,
+        fromIndex,
+      );
       setWorking(g.result);
     }
     if (g.kind === 'lasso') {
@@ -474,14 +532,13 @@ export default function Stage({
       const dx = p.x - g.start.x,
         dy = p.y - g.start.y;
       g.result = g.original.map((s) =>
-        g.selection!.includes(s.id)
-          ? { ...s, points: s.points.map((pt) => ({ ...pt, x: pt.x + dx, y: pt.y + dy })) }
-          : s,
+        g.selection!.includes(s.id) ? translateStroke(s, dx, dy) : s,
       );
       setWorking(g.result);
     }
   };
   const up = (e: ReactPointerEvent, cancel = false) => {
+    if (e.pointerType !== 'mouse' || cancel) hideEraser();
     if (tap.current?.ids.has(e.pointerId)) {
       if (cancel) tap.current.cancelled = true;
       tap.current.ids.delete(e.pointerId);
@@ -519,21 +576,27 @@ export default function Stage({
           dx = p.x - g.start.x,
           dy = p.y - g.start.y;
         g.result = g.original.map((s) =>
-          g.selection!.includes(s.id)
-            ? { ...s, points: s.points.map((pt) => ({ ...pt, x: pt.x + dx, y: pt.y + dy })) }
-            : s,
+          g.selection!.includes(s.id) ? translateStroke(s, dx, dy) : s,
         );
       }
-      if (g.kind === 'erase')
-        g.result = (g.result || g.original).filter(
-          (s) => !strokeHit(s, point(e), 12 / screenScale()),
+      if (g.kind === 'erase') {
+        const p = point(e),
+          last = g.points.at(-1)!,
+          fromIndex = g.points.length;
+        if (Math.hypot(p.x - last.x, p.y - last.y) > 1e-6) g.points.push(p);
+        g.result = applyErasure(
+          g.original,
+          { ...g.erasure!, points: [...g.points] },
+          g.erased,
+          fromIndex,
         );
-      if ((g.kind === 'erase' || g.kind === 'move') && g.result)
+      }
+      if ((g.kind === 'erase' || g.kind === 'move') && g.result && g.result !== g.original)
         onChange({ ...pageRef.current, strokes: g.result });
       if (g.kind === 'lasso')
         setSelection(
           g.original
-            .filter((s) => s.points.some((p) => pointInPolygon(p, g.points)))
+            .filter((s) => s.points.some((p) => !pointErased(s, p) && pointInPolygon(p, g.points)))
             .map((s) => s.id),
         );
       if (g.kind === 'pan' && g.pointerType === 'touch') {
@@ -645,6 +708,7 @@ export default function Stage({
         ) {
           swipe.current = null;
           if (!nativePinch.current || nativePinch.current.ending) {
+            hideEraser();
             beginView();
             const [a, b] = contacts,
               r = viewport.current!.getBoundingClientRect();
@@ -804,6 +868,7 @@ export default function Stage({
         }
       }}
       onPointerMove={move}
+      onPointerLeave={hideEraser}
       onPointerUp={(e) => up(e)}
       onPointerCancel={(e) => up(e, true)}
       onLostPointerCapture={(e) => {
@@ -852,6 +917,12 @@ export default function Stage({
         {loading && <div className="pdf-loading">ページを読み込み中…</div>}
       </div>
       <canvas ref={laserCanvas} className="laser-canvas" />
+      <div
+        ref={eraserCursor}
+        className="eraser-cursor"
+        data-testid="eraser-cursor"
+        aria-hidden="true"
+      />
       {!!selection.length && (
         <button
           className="selection-delete"

@@ -178,6 +178,25 @@ export default function App() {
     lastWritingTool = useRef<'pen' | 'highlighter'>('pen');
   if (tool !== 'hand') pencilTool.current = tool;
   if (tool === 'pen' || tool === 'highlighter') lastWritingTool.current = tool;
+  const widthTool = tool === 'hand' ? pencilTool.current : tool;
+  const toolWidth =
+    widthTool === 'laser'
+      ? preferences.laserWidth
+      : widthTool === 'eraser'
+        ? preferences.eraserWidth
+        : width;
+  const widthLabel =
+    widthTool === 'laser'
+      ? 'レーザーの太さ'
+      : widthTool === 'eraser'
+        ? '消しゴムのサイズ'
+        : 'ペンの太さ';
+  const widthOptions =
+    widthTool === 'laser'
+      ? [2, 4, 6, 8, 12]
+      : widthTool === 'eraser'
+        ? [8, 16, 28, 48, 80]
+        : [1, 2.5, 4, 7, 10];
   const toggleEraser = useCallback(
     () =>
       setTool((current) =>
@@ -840,24 +859,27 @@ export default function App() {
               ))}
               <label className="width-select">
                 <span
-                  className="width-preview"
+                  className={`width-preview ${widthTool === 'eraser' ? 'eraser-preview' : ''}`}
                   style={{
-                    height: Math.min(tool === 'laser' ? preferences.laserWidth : width, 10),
-                    background: tool === 'laser' ? '#ff3c3c' : color,
+                    height: widthTool === 'eraser' ? 16 : Math.min(toolWidth, 10),
+                    background:
+                      widthTool === 'eraser' ? '#fff' : widthTool === 'laser' ? '#ff3c3c' : color,
                   }}
                 />
                 <select
-                  aria-label={tool === 'laser' ? 'レーザーの太さ' : 'ペンの太さ'}
-                  value={tool === 'laser' ? preferences.laserWidth : width}
+                  aria-label={widthLabel}
+                  value={toolWidth}
                   onChange={(e) =>
-                    tool === 'laser'
+                    widthTool === 'laser'
                       ? setPreferences((p) => ({ ...p, laserWidth: Number(e.target.value) }))
-                      : setWidth(Number(e.target.value))
+                      : widthTool === 'eraser'
+                        ? setPreferences((p) => ({ ...p, eraserWidth: Number(e.target.value) }))
+                        : setWidth(Number(e.target.value))
                   }
                 >
-                  {(tool === 'laser' ? [2, 4, 6, 8, 12] : [1, 2.5, 4, 7, 10]).map((v) => (
+                  {widthOptions.map((v) => (
                     <option key={v} value={v}>
-                      {v} {tool === 'laser' ? 'px' : 'pt'}
+                      {v} {widthTool === 'laser' || widthTool === 'eraser' ? 'px' : 'pt'}
                     </option>
                   ))}
                 </select>
@@ -1063,6 +1085,7 @@ export default function App() {
                   color={color}
                   width={width}
                   laserWidth={preferences.laserWidth}
+                  eraserWidth={preferences.eraserWidth}
                   fingerInk={fingerInk}
                   pencilTool={pencilTool.current}
                   palmRejection={preferences.palmRejection}
@@ -1328,7 +1351,7 @@ export default function App() {
           <div className="help-content">
             <h3>書く・動かす</h3>
             <p>
-              Pencilまたはマウスで筆記。指1本は移動とページ送り、2本指はピンチで拡大縮小。「入力設定」で指による筆記も有効にできます。選択ツールでは線を囲み、選択した線をドラッグで移動できます。消しゴムは線全体を消します。
+              Pencilまたはマウスで筆記。指1本は移動とページ送り、2本指はピンチで拡大縮小。「入力設定」で指による筆記も有効にできます。選択ツールでは線を囲み、選択した線をドラッグで移動できます。消しゴムは上部でサイズを選び、円が通った部分だけを消します。PDF本体は消えません。
             </p>
             <h3>動画で伝える</h3>
             <p>
