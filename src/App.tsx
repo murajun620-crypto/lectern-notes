@@ -881,7 +881,11 @@ export default function App() {
                   <input
                     type="checkbox"
                     checked={fingerInk}
-                    onChange={(e) => setPreferences((p) => ({ ...p, fingerInk: e.target.checked }))}
+                    onChange={(e) => {
+                      const enabled = e.target.checked;
+                      setPreferences((p) => ({ ...p, fingerInk: enabled }));
+                      if (enabled && tool === 'hand') setTool(lastWritingTool.current);
+                    }}
                   />{' '}
                   指でも筆記する
                 </label>
@@ -899,7 +903,7 @@ export default function App() {
                   手のひらの誤操作を抑える
                 </label>
                 <small>
-                  Pencil使用中の接触、置いたままの手、大きな接触を無視します。離した後に新しく置いた指はすぐ使えます。
+                  Pencil使用中の接触と、置いたままの手を無視します。指だけで使うときは接触面の大きさで筆記・ピンチを止めません。
                 </small>
                 <label>
                   <input

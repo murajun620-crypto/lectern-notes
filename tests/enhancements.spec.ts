@@ -47,7 +47,14 @@ async function pointer(
 async function nativeTouch(
   page: Page,
   type: string,
-  points: { identifier: number; clientX: number; clientY: number; touchType?: string }[],
+  points: {
+    identifier: number;
+    clientX: number;
+    clientY: number;
+    touchType?: string;
+    radiusX?: number;
+    radiusY?: number;
+  }[],
   changed = points,
 ) {
   await page.getByTestId('stage').evaluate(
@@ -71,6 +78,150 @@ async function mockYoutube(page: Page) {
     }),
   );
 }
+
+test('finger writing accepts broad contacts and yields to native pinch on a phone-sized viewport', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await demo(page);
+  await page.getByRole('button', { name: '移動', exact: true }).click();
+  await page.getByLabel('入力設定', { exact: true }).click();
+  await page.getByRole('checkbox', { name: '指でも筆記する', exact: true }).check();
+  await page.getByLabel('入力設定', { exact: true }).click();
+  await expect(page.getByRole('button', { name: 'ペン', exact: true })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+  await page.evaluate(() => {
+    HTMLElement.prototype.setPointerCapture = function () {};
+  });
+  let r = (await page.getByTestId('pdf-page').boundingBox())!;
+  const x = r.x + r.width * 0.25,
+    y = r.y + r.height * 0.4;
+  await pointer(page, 'pointerdown', 1, 'touch', x, y, { width: 60, height: 54, pressure: 1 });
+  // An implicit capture lost by the child page must not cancel the stage's capture.
+  await page
+    .getByTestId('pdf-page')
+    .dispatchEvent('lostpointercapture', { pointerId: 1, pointerType: 'touch', bubbles: true });
+  for (let i = 1; i <= 8; i++)
+    await pointer(page, 'pointermove', 1, 'touch', x + i * 5, y + Math.sin(i) * 4, {
+      width: 60,
+      height: 54,
+      pressure: i / 8,
+    });
+  await pointer(page, 'pointerup', 1, 'touch', x + 40, y, { width: 60, height: 54 });
+  await expect.poll(async () => (await stored(page))[0].pages[0].strokes.length).toBe(1);
+  const stroke = (await stored(page))[0].pages[0].strokes[0];
+  expect(stroke.points.length).toBeGreaterThan(5);
+  expect(stroke.points.every((pt: any) => pt.p === 0.5)).toBe(true);
+  r = (await page.getByTestId('pdf-page').boundingBox())!;
+  const cx = r.x + r.width / 2,
+    cy = r.y + r.height / 2;
+  const a = { identifier: 11, clientX: cx - 25, clientY: cy, radiusX: 30, radiusY: 27 },
+    b = { identifier: 12, clientX: cx + 25, clientY: cy, radiusX: 30, radiusY: 27 };
+  await pointer(page, 'pointerdown', 11, 'touch', a.clientX, a.clientY, { width: 60, height: 54 });
+  await nativeTouch(page, 'touchstart', [a]);
+  await pointer(page, 'pointerdown', 12, 'touch', b.clientX, b.clientY, { width: 60, height: 54 });
+  await nativeTouch(page, 'touchstart', [a, b]);
+  const am = { ...a, clientX: cx - 60 },
+    bm = { ...b, clientX: cx + 60 };
+  await pointer(page, 'pointermove', 11, 'touch', am.clientX, am.clientY, {
+    width: 60,
+    height: 54,
+  });
+  await pointer(page, 'pointermove', 12, 'touch', bm.clientX, bm.clientY, {
+    width: 60,
+    height: 54,
+  });
+  await nativeTouch(page, 'touchmove', [am, bm]);
+  await expect
+    .poll(async () => Number(await page.getByLabel('表示倍率').inputValue()))
+    .toBeGreaterThan(2);
+  await pointer(page, 'pointerup', 11, 'touch', am.clientX, am.clientY);
+  await nativeTouch(page, 'touchend', [bm], [am]);
+  await pointer(page, 'pointerup', 12, 'touch', bm.clientX, bm.clientY);
+  await nativeTouch(page, 'touchend', [], [bm]);
+  await expect(page.getByRole('button', { name: 'ペン', exact: true })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+  expect((await stored(page))[0].pages[0].strokes).toHaveLength(1);
+  // Safari's Touch Events must also pinch when no secondary PointerEvent is delivered.
+  await page.getByLabel('表示倍率').selectOption('1');
+  await nativeTouch(page, 'touchstart', [a, b]);
+  await nativeTouch(page, 'touchmove', [am, bm]);
+  await nativeTouch(page, 'touchend', [], [am, bm]);
+  await expect
+    .poll(async () => Number(await page.getByLabel('表示倍率').inputValue()))
+    .toBeGreaterThan(2);
+  const before = await page.getByTestId('pdf-page').evaluate((el) => el.style.transform);
+  await nativeTouch(page, 'touchstart', [am, bm]);
+  await nativeTouch(page, 'touchmove', [
+    { ...am, clientX: am.clientX + 25, clientY: am.clientY + 20 },
+    { ...bm, clientX: bm.clientX + 25, clientY: bm.clientY + 20 },
+  ]);
+  await nativeTouch(page, 'touchend', [], [am, bm]);
+  await expect
+    .poll(() => page.getByTestId('pdf-page').evaluate((el) => el.style.transform))
+    .not.toBe(before);
+  expect((await stored(page))[0].pages[0].strokes).toHaveLength(1);
+});
+
+test('real broad-finger touch events can draw and pinch with finger ink enabled', async ({
+  browser,
+  browserName,
+}) => {
+  test.skip(
+    browserName !== 'chromium',
+    'Real gesture injection uses CDP; WebKit native Touch Events are tested separately.',
+  );
+  const context = await browser.newContext({
+    viewport: { width: 390, height: 844 },
+    hasTouch: true,
+    isMobile: true,
+  });
+  const page = await context.newPage();
+  await demo(page);
+  await page.getByLabel('入力設定', { exact: true }).click();
+  await page.getByRole('checkbox', { name: '指でも筆記する', exact: true }).check();
+  await page.getByLabel('入力設定', { exact: true }).click();
+  const session = await context.newCDPSession(page),
+    r = (await page.getByTestId('pdf-page').boundingBox())!,
+    x = r.x + r.width * 0.25,
+    y = r.y + r.height * 0.4;
+  const touch = async (
+    type: 'touchStart' | 'touchMove' | 'touchEnd',
+    points: { x: number; y: number; id: number }[],
+  ) =>
+    session.send('Input.dispatchTouchEvent', {
+      type,
+      touchPoints: points.map((p) => ({ ...p, radiusX: 30, radiusY: 27, force: 1 })),
+    });
+  await touch('touchStart', [{ x, y, id: 1 }]);
+  for (let i = 1; i <= 10; i++)
+    await touch('touchMove', [{ x: x + i * 4, y: y + Math.sin(i) * 3, id: 1 }]);
+  await touch('touchEnd', []);
+  await expect.poll(async () => (await stored(page))[0].pages[0].strokes.length).toBe(1);
+  expect((await stored(page))[0].pages[0].strokes[0].points.every((pt: any) => pt.p === 0.5)).toBe(
+    true,
+  );
+  const cx = r.x + r.width / 2,
+    cy = r.y + r.height / 2;
+  await touch('touchStart', [
+    { x: cx - 25, y: cy, id: 2 },
+    { x: cx + 25, y: cy, id: 3 },
+  ]);
+  await touch('touchMove', [
+    { x: cx - 60, y: cy, id: 2 },
+    { x: cx + 60, y: cy, id: 3 },
+  ]);
+  await touch('touchEnd', []);
+  await expect
+    .poll(async () => Number(await page.getByLabel('表示倍率').inputValue()))
+    .toBeGreaterThan(2);
+  expect((await stored(page))[0].pages[0].strokes).toHaveLength(1);
+  await context.close();
+});
 
 test('Pencil writes in hand mode, a resting palm stays blocked, and two-finger tap switches eraser', async ({
   page,
@@ -115,9 +266,9 @@ test('Pencil writes in hand mode, a resting palm stays blocked, and two-finger t
   await pointer(page, 'pointerup', 2, 'touch', a - 200, b + 40);
   await expect(page.getByLabel('ページ番号')).toHaveValue('1');
   await expect.poll(async () => (await stored(page))[0].pages[0].strokes.length).toBe(2);
-  await pointer(page, 'pointerdown', 4, 'touch', a, b, { width: 60, height: 50 });
-  await pointer(page, 'pointermove', 4, 'touch', a - 150, b, { width: 60, height: 50 });
-  await pointer(page, 'pointerup', 4, 'touch', a - 150, b, { width: 60, height: 50 });
+  await pointer(page, 'pointerdown', 4, 'touch', a, b, { width: 100, height: 90 });
+  await pointer(page, 'pointermove', 4, 'touch', a - 150, b, { width: 100, height: 90 });
+  await pointer(page, 'pointerup', 4, 'touch', a - 150, b, { width: 100, height: 90 });
   await expect(page.getByLabel('ページ番号')).toHaveValue('1');
   for (let i = 0; i < 2; i++) {
     await pointer(page, 'pointerdown', 5, 'touch', a - 30, b);
@@ -182,7 +333,7 @@ test('Safari touch fallback flips pages while zoomed and never double-turns a Po
   await nativeTouch(page, 'touchmove', [end]);
   await pointer(page, 'pointerup', 30, 'touch', x - 120, y, { width: 60, height: 50 });
   await nativeTouch(page, 'touchend', [], [end]);
-  await expect(page.getByLabel('ページ番号')).toHaveValue('2');
+  await expect(page.getByLabel('ページ番号')).toHaveValue('3');
 });
 
 test('iPad-sized standalone layout keeps top buttons and three presets visible; fullscreen falls back to lecture', async ({

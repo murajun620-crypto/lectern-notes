@@ -78,6 +78,14 @@ export default function Stage({
       null,
     );
   const palm = useRef(new PalmGuard());
+  const nativePinch = useRef<{
+    ids: [number, number];
+    distance: number;
+    zoom: number;
+    anchor: { x: number; y: number };
+    starts: Map<number, { x: number; y: number }>;
+    ending: boolean;
+  } | null>(null);
   const swipe = useRef<{ id: number; x: number; y: number; lastX: number; lastY: number } | null>(
     null,
   );
@@ -130,6 +138,7 @@ export default function Stage({
     gesture.current = null;
     touches.current.clear();
     pinch.current = null;
+    nativePinch.current = null;
     lasers.current = [];
     tap.current = null;
     swipe.current = null;
@@ -140,6 +149,7 @@ export default function Stage({
       gesture.current = null;
       touches.current.clear();
       pinch.current = null;
+      nativePinch.current = null;
       tap.current = null;
       swipe.current = null;
       setDraft(null);
@@ -259,12 +269,17 @@ export default function Stage({
     frame = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(frame);
   }, [page.width, page.height, scale, trail]);
-  const point = (e: { clientX: number; clientY: number; pressure?: number }): Point => {
+  const point = (e: {
+    clientX: number;
+    clientY: number;
+    pressure?: number;
+    pointerType?: string;
+  }): Point => {
     const r = paper.current!.getBoundingClientRect();
     return {
       x: ((e.clientX - r.left) / r.width) * page.width,
       y: ((e.clientY - r.top) / r.height) * page.height,
-      p: e.pressure && e.pressure > 0 ? e.pressure : 0.5,
+      p: e.pointerType === 'pen' && e.pressure && e.pressure > 0 ? e.pressure : 0.5,
     };
   };
   const turnBySwipe = (dx: number, dy: number) => {
@@ -376,6 +391,7 @@ export default function Stage({
       tap.current!.cancelled = true;
     if (touches.current.has(e.pointerId))
       touches.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (e.pointerType === 'touch' && nativePinch.current) return;
     if (pinch.current && touches.current.size >= 2) {
       const [a, b] = [...touches.current.values()],
         g = pinch.current,
@@ -412,7 +428,12 @@ export default function Stage({
       const coalesced = e.nativeEvent.getCoalescedEvents?.();
       const samples = coalesced?.length ? coalesced : [e.nativeEvent];
       for (const sample of samples) {
-        const pt = point(sample);
+        const pt = point({
+          clientX: sample.clientX,
+          clientY: sample.clientY,
+          pressure: sample.pressure,
+          pointerType: e.pointerType,
+        });
         const last = g.points.at(-1)!;
         if (Math.hypot(pt.x - last.x, pt.y - last.y) > 0.25 / scale) g.points.push(pt);
       }
@@ -449,6 +470,10 @@ export default function Stage({
       }
     }
     touches.current.delete(e.pointerId);
+    if (e.pointerType === 'touch' && nativePinch.current) {
+      gesture.current = null;
+      return;
+    }
     if (pinch.current) {
       if (touches.current.size < 2) pinch.current = null;
       gesture.current = null;
@@ -504,6 +529,7 @@ export default function Stage({
       onPointerDownCapture={(e) => {
         if (e.pointerType === 'pen') {
           swipe.current = null;
+          nativePinch.current = null;
           const g = gesture.current;
           if (g?.pointerType === 'touch') {
             if (g.kind === 'pan') setPan(g.pan);
@@ -569,11 +595,59 @@ export default function Stage({
       }}
       onPointerDown={down}
       onTouchStart={(e) => {
+        const contacts = Array.from(e.touches) as Array<
+          (typeof e.touches)[0] & { radiusX?: number; radiusY?: number; touchType?: string }
+        >;
+        const interactive = (e.target as Element).closest('.video-box,.selection-delete');
+        if (
+          contacts.length === 2 &&
+          !interactive &&
+          !palm.current.blocksNavigation(performance.now(), palmRejection) &&
+          contacts.every(
+            (t) =>
+              t.touchType !== 'stylus' &&
+              !palm.current.rejectsGeometry(
+                (t.radiusX || 0) * 2,
+                (t.radiusY || 0) * 2,
+                performance.now(),
+                palmRejection,
+              ),
+          )
+        ) {
+          swipe.current = null;
+          if (!nativePinch.current) {
+            const [a, b] = contacts,
+              r = viewport.current!.getBoundingClientRect();
+            const mid = {
+              x: (a.clientX + b.clientX) / 2 - r.left - size.w / 2,
+              y: (a.clientY + b.clientY) / 2 - r.top - size.h / 2,
+            };
+            nativePinch.current = {
+              ids: [a.identifier, b.identifier],
+              distance: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY),
+              zoom,
+              anchor: { x: (mid.x - pan.x) / (fit * zoom), y: (mid.y - pan.y) / (fit * zoom) },
+              starts: new Map(contacts.map((t) => [t.identifier, { x: t.clientX, y: t.clientY }])),
+              ending: false,
+            };
+            gesture.current = null;
+            pinch.current = null;
+            setDraft(null);
+            setWorking(null);
+            setLasso([]);
+          }
+          return;
+        }
+        if (nativePinch.current) {
+          nativePinch.current.ending = true;
+          if (tap.current) tap.current.cancelled = true;
+          return;
+        }
         if (
           e.touches.length !== 1 ||
           fingerInk ||
           tool === 'laser' ||
-          (e.target as Element).closest('.video-box,.selection-delete') ||
+          interactive ||
           palm.current.blocksNavigation(performance.now(), palmRejection)
         ) {
           swipe.current = null;
@@ -586,7 +660,12 @@ export default function Stage({
         };
         if (
           t.touchType === 'stylus' ||
-          (Math.max(t.radiusX || 0, t.radiusY || 0) * 2 >= 40 && palmRejection)
+          palm.current.rejectsGeometry(
+            (t.radiusX || 0) * 2,
+            (t.radiusY || 0) * 2,
+            performance.now(),
+            palmRejection,
+          )
         ) {
           swipe.current = null;
           return;
@@ -600,6 +679,50 @@ export default function Stage({
         };
       }}
       onTouchMove={(e) => {
+        const n = nativePinch.current;
+        if (n) {
+          if (
+            n.ending ||
+            e.touches.length !== 2 ||
+            palm.current.blocksNavigation(performance.now(), palmRejection)
+          ) {
+            n.ending = true;
+            return;
+          }
+          const contacts = Array.from(e.touches),
+            a = contacts.find((t) => t.identifier === n.ids[0]),
+            b = contacts.find((t) => t.identifier === n.ids[1]);
+          if (!a || !b) {
+            n.ending = true;
+            return;
+          }
+          if (
+            tap.current &&
+            [a, b].some((t) => {
+              const start = n.starts.get(t.identifier)!;
+              return Math.hypot(t.clientX - start.x, t.clientY - start.y) > 12;
+            })
+          )
+            tap.current.cancelled = true;
+          const r = viewport.current!.getBoundingClientRect(),
+            z = clamp(
+              (n.zoom * Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY)) /
+                (n.distance || 1),
+              1,
+              5,
+            );
+          setZoom(z);
+          setPan(
+            limit(
+              {
+                x: (a.clientX + b.clientX) / 2 - r.left - size.w / 2 - n.anchor.x * fit * z,
+                y: (a.clientY + b.clientY) / 2 - r.top - size.h / 2 - n.anchor.y * fit * z,
+              },
+              z,
+            ),
+          );
+          return;
+        }
         const g = swipe.current;
         if (!g) return;
         if (
@@ -616,6 +739,17 @@ export default function Stage({
         }
       }}
       onTouchEnd={(e) => {
+        if (nativePinch.current) {
+          nativePinch.current.ending = true;
+          if (!e.touches.length) {
+            nativePinch.current = null;
+            touches.current.clear();
+            pinch.current = null;
+            tap.current = null;
+            gesture.current = null;
+          }
+          return;
+        }
         const g = swipe.current;
         if (!g) return;
         const t = Array.from(e.changedTouches).find((t) => t.identifier === g.id);
@@ -626,11 +760,23 @@ export default function Stage({
       }}
       onTouchCancel={() => {
         swipe.current = null;
+        if (nativePinch.current) {
+          nativePinch.current = null;
+          touches.current.clear();
+          pinch.current = null;
+          tap.current = null;
+          if (gesture.current?.pointerType === 'touch') gesture.current = null;
+          setDraft(null);
+          setWorking(null);
+          setLasso([]);
+        }
       }}
       onPointerMove={move}
       onPointerUp={(e) => up(e)}
       onPointerCancel={(e) => up(e, true)}
-      onLostPointerCapture={(e) => up(e, true)}
+      onLostPointerCapture={(e) => {
+        if (e.target === e.currentTarget) up(e, true);
+      }}
       onContextMenu={(e) => e.preventDefault()}
       onWheel={(e) => {
         if (e.ctrlKey || e.metaKey) setZoom(clamp(zoom - e.deltaY * 0.005, 1, 5));

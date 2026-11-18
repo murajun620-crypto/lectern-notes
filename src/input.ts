@@ -46,6 +46,11 @@ export class PalmGuard {
   private blocked = new Set<number>();
   private lastPen = -Infinity;
   private lastRejectedClick = -Infinity;
+  rejectsGeometry(width: number, height: number, now: number, enabled: boolean) {
+    // Contact width alone cannot distinguish a finger from a palm. Only use a
+    // conservative size heuristic shortly after real Pencil activity.
+    return enabled && now - this.lastPen < 1500 && Math.max(width, height) >= 80;
+  }
   penDown(id: number, now: number) {
     this.pens.add(id);
     this.lastPen = now;
@@ -68,7 +73,7 @@ export class PalmGuard {
       (enabled &&
         (this.pens.size > 0 ||
           (rejectRecent && now - this.lastPen < 350) ||
-          Math.max(width, height) >= 40))
+          this.rejectsGeometry(width, height, now, enabled)))
     ) {
       this.blocked.add(id);
       return false;
@@ -91,16 +96,17 @@ export class PalmGuard {
       (this.pens.size > 0 ||
         now - this.lastPen < 350 ||
         now - this.lastRejectedClick < 350 ||
-        Math.max(width, height) >= 40)
+        this.rejectsGeometry(width, height, now, enabled))
     );
   }
   blocksNavigation(_now: number, enabled: boolean) {
     return enabled && (this.pens.size > 0 || this.blocked.size > 0);
   }
-  reset(now: number) {
+  reset(_now: number) {
     this.pens.clear();
     this.touches.clear();
     this.blocked.clear();
-    this.lastPen = now;
+    this.lastPen = -Infinity;
+    this.lastRejectedClick = -Infinity;
   }
 }

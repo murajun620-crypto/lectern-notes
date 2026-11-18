@@ -34,14 +34,24 @@ describe('palm rejection lifecycle', () => {
     g.touchUp(3);
     expect(g.blocksNavigation(600, true)).toBe(false);
   });
-  it('rejects broad contacts and can recover after losing focus', () => {
+  it('uses broad-contact rejection only after real Pencil activity and recovers on blur', () => {
     const g = new PalmGuard();
-    expect(g.touchDown(1, 65, 40, 0, true)).toBe(false);
-    expect(g.blocksNavigation(0, true)).toBe(true);
+    expect(g.touchDown(1, 65, 40, 0, true)).toBe(true);
     g.penDown(2, 50);
+    g.penUp(2, 60);
+    expect(g.touchDown(3, 100, 90, 500, true, false)).toBe(false);
+    expect(g.blocksNavigation(500, true)).toBe(true);
     g.reset(100);
-    expect(g.touchDown(1, 5, 5, 500, true)).toBe(true);
-    expect(g.touchDown(3, 65, 40, 500, false)).toBe(true);
+    expect(g.touchDown(1, 65, 40, 100, true)).toBe(true);
+    expect(g.touchDown(3, 100, 90, 100, true)).toBe(true);
+    expect(g.blocksClick('touch', 65, 40, 100, true)).toBe(false);
+  });
+  it('never treats large fingers on a Pencil-free device as palms', () => {
+    const g = new PalmGuard();
+    for (let id = 1; id <= 3; id++) expect(g.touchDown(id, 60, 55, 0, true, true)).toBe(true);
+    expect(g.blocksNavigation(0, true)).toBe(false);
+    expect(g.blocksClick('touch', 60, 55, 0, true)).toBe(false);
+    expect(g.rejectsGeometry(60, 55, 0, true)).toBe(false);
   });
 });
 describe('small thumbnail and independent playback geometry', () => {
