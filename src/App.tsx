@@ -50,7 +50,7 @@ import {
 } from './storage';
 import { demoFile, exportPdf, importPdf, releasePdfs, renderPage } from './pdf';
 import Stage from './Stage';
-import { loadInputPreferences } from './input';
+import { highlighterWidths, loadInputPreferences, penWidths } from './input';
 import type { PencilTool } from './input';
 import { initialVideoRect } from './video-layout';
 import UpdateButton from './UpdateButton';
@@ -153,8 +153,13 @@ const tools: { id: Tool; label: string; icon: ReactNode; key: string }[] = [
   { id: 'laser', label: 'レーザー', icon: <Sparkles />, key: 'L' },
 ];
 const inkPalettes = {
-  pen: { label: 'ペン', preference: 'presets' },
-  highlighter: { label: '蛍光ペン', preference: 'highlighterPresets' },
+  pen: { label: 'ペン', preference: 'presets', widthPreference: 'penWidth', widths: penWidths },
+  highlighter: {
+    label: '蛍光ペン',
+    preference: 'highlighterPresets',
+    widthPreference: 'highlighterWidth',
+    widths: highlighterWidths,
+  },
 } as const;
 type WritingTool = keyof typeof inkPalettes;
 type Dialog =
@@ -173,7 +178,6 @@ export default function App() {
       pen: 0,
       highlighter: 0,
     }),
-    [width, setWidth] = useState(2.5),
     [preferences, setPreferences] = useState(loadInputPreferences),
     [trail, setTrail] = useState(true),
     [zoom, setZoom] = useState(1),
@@ -187,6 +191,7 @@ export default function App() {
   if (tool === 'pen' || tool === 'highlighter') lastWritingTool.current = tool;
   const writingTool = lastWritingTool.current;
   const palette = inkPalettes[writingTool];
+  const width = preferences[palette.widthPreference];
   const presets = preferences[palette.preference];
   const colorChoice = colorChoices[writingTool];
   const color = typeof colorChoice === 'number' ? presets[colorChoice] : colorChoice;
@@ -204,13 +209,13 @@ export default function App() {
       ? 'レーザーの太さ'
       : widthTool === 'eraser'
         ? '消しゴムのサイズ'
-        : 'ペンの太さ';
+        : `${palette.label}の太さ`;
   const widthOptions =
     widthTool === 'laser'
       ? [2, 4, 6, 8, 12]
       : widthTool === 'eraser'
         ? [8, 16, 28, 48, 80]
-        : [1, 2.5, 4, 7, 10];
+        : palette.widths;
   const toggleEraser = useCallback(
     () =>
       setTool((current) =>
@@ -888,7 +893,10 @@ export default function App() {
                       ? setPreferences((p) => ({ ...p, laserWidth: Number(e.target.value) }))
                       : widthTool === 'eraser'
                         ? setPreferences((p) => ({ ...p, eraserWidth: Number(e.target.value) }))
-                        : setWidth(Number(e.target.value))
+                        : setPreferences((p) => ({
+                            ...p,
+                            [palette.widthPreference]: Number(e.target.value),
+                          }))
                   }
                 >
                   {widthOptions.map((v) => (

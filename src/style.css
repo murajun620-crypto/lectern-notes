@@ -910,16 +910,35 @@ h3 {
 .pdf-page {
   position: relative;
   flex-shrink: 0;
+  z-index: 2;
+  will-change: transform;
+}
+.pdf-backdrop {
+  position: absolute;
+  left: 50%;
+  top: 50%;
   background: white;
   box-shadow: 0 4px 25px #21362d15;
   will-change: transform;
 }
-.pdf-page > canvas {
+.pdf-page > canvas,
+.pdf-backdrop > canvas {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
   pointer-events: none;
+}
+.pdf-detail-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  transform-origin: top left;
+}
+.pdf-detail-layer canvas {
+  position: absolute;
+  display: block;
 }
 .laser-canvas {
   z-index: 8;

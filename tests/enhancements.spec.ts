@@ -379,8 +379,13 @@ test('iPad-sized layout preserves separate ink palettes through tool switching, 
   await page.getByRole('button', { name: '画面いっぱいの講義表示', exact: true }).click();
   await expect(page.locator('.app')).toHaveClass(/lecture/);
   await expect(page.getByRole('alert')).toHaveCount(0);
+  const penWidth = page.getByLabel('ペンの太さ', { exact: true });
+  const highlighterWidth = page.getByLabel('蛍光ペンの太さ', { exact: true });
+  await penWidth.selectOption('7');
   const highlighter = page.getByRole('button', { name: '蛍光ペン', exact: true });
   await highlighter.click();
+  await expect(highlighterWidth).toHaveValue('12.5');
+  await highlighterWidth.selectOption('35');
   for (const [i, color] of ['#fff200', '#ff45bf', '#a6ff00'].entries()) {
     await expect(swatch('蛍光ペン', i + 1)).toBeVisible();
     await expect(swatch('蛍光ペン', i + 1)).toHaveCSS('--swatch', color);
@@ -396,18 +401,26 @@ test('iPad-sized layout preserves separate ink palettes through tool switching, 
   };
   await draw(0.4);
   await page.getByRole('button', { name: 'ペン', exact: true }).click();
+  await expect(penWidth).toHaveValue('7');
   await expect(swatch('ペン', 2)).toHaveAttribute('aria-pressed', 'true');
   await draw(0.6);
   await highlighter.click();
+  await expect(highlighterWidth).toHaveValue('35');
   await expect(swatch('蛍光ペン', 2)).toHaveAttribute('aria-pressed', 'true');
   await expect
     .poll(async () => {
       const strokes = (await stored(page))[0].pages[0].strokes;
-      return strokes.map(({ tool, color }: { tool: string; color: string }) => [tool, color]);
+      return strokes.map(
+        ({ tool, color, width }: { tool: string; color: string; width: number }) => [
+          tool,
+          color,
+          width,
+        ],
+      );
     })
     .toEqual([
-      ['highlighter', '#ff45bf'],
-      ['pen', '#00aa55'],
+      ['highlighter', '#ff45bf', 35],
+      ['pen', '#00aa55', 7],
     ]);
   await page.getByLabel('入力設定', { exact: true }).click();
   await changePreset('蛍光ペンのプリセット2の色を変更', '#ff7a20');
@@ -415,8 +428,10 @@ test('iPad-sized layout preserves separate ink palettes through tool switching, 
   await page.getByLabel('入力設定', { exact: true }).click();
   await page.screenshot({ path: `artifacts/ipad-layout-${browserName}.png` });
   await page.reload();
+  await expect(penWidth).toHaveValue('7');
   await expect(swatch('ペン', 2)).toHaveCSS('--swatch', '#00aa55');
   await highlighter.click();
+  await expect(highlighterWidth).toHaveValue('35');
   await expect(swatch('蛍光ペン', 2)).toHaveCSS('--swatch', '#ff7a20');
 });
 

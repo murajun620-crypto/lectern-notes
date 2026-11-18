@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import type { Page } from '@playwright/test';
+import { PDFDocument, rgb } from 'pdf-lib';
 async function demo(page: Page) {
   await page.goto('/');
   await page.getByRole('button', { name: 'まずは3ページのサンプルで試す' }).click();
@@ -223,4 +224,76 @@ test('video placement and inline player stay aligned after compositor zoom', asy
   expect(await page.evaluate(() => (window as any).__playerCount)).toBe(1);
   await page.getByTitle('動画を閉じる', { exact: true }).click();
   expect((await projects(page))[0].pages[0].videos[0]).toEqual(v);
+});
+
+test.describe('high-DPI PDF detail rendering', () => {
+  test.use({ viewport: { width: 1024, height: 768 }, deviceScaleFactor: 2 });
+
+  test('renders the visible PDF at device resolution beyond the full-page limit and refreshes after panning', async ({
+    page,
+  }) => {
+    const pdf = await PDFDocument.create();
+    const sheet = pdf.addPage([595, 842]);
+    sheet.drawRectangle({ x: 0, y: 0, width: 297.5, height: 842, color: rgb(1, 0, 0) });
+    sheet.drawRectangle({ x: 297.5, y: 0, width: 297.5, height: 842, color: rgb(0, 0, 1) });
+    await page.goto('/');
+    const chooser = page.waitForEvent('filechooser');
+    await page.getByRole('button', { name: 'PDFを読み込む', exact: true }).click();
+    await (
+      await chooser
+    ).setFiles({
+      name: 'zoom-resolution.pdf',
+      mimeType: 'application/pdf',
+      buffer: Buffer.from(await pdf.save()),
+    });
+    await expect(page.locator('.pdf-canvas[data-page]')).toHaveCount(1);
+    await page.getByLabel('表示方法').selectOption('width');
+    await page.getByLabel('表示倍率').selectOption('5');
+
+    const stage = (await page.getByTestId('stage').boundingBox())!;
+    const paper = (await page.getByTestId('pdf-page').boundingBox())!;
+    const detail = page.locator('.pdf-detail-layer canvas');
+    const samples = () =>
+      detail.evaluate((canvas: HTMLCanvasElement) => {
+        const ctx = canvas.getContext('2d')!;
+        return [0.25, 0.75].map((fraction) =>
+          Array.from(
+            ctx.getImageData(Math.floor(canvas.width * fraction), canvas.height >> 1, 1, 1).data,
+          ),
+        );
+      });
+    await expect(detail).toBeVisible();
+    const pixels = await detail.evaluate((canvas: HTMLCanvasElement) => ({
+      width: canvas.width,
+      height: canvas.height,
+    }));
+    expect(pixels.width).toBeCloseTo(stage.width * 2, 0);
+    expect(pixels.height).toBeCloseTo(stage.height * 2, 0);
+    const previewWidth = await page
+      .locator('.pdf-canvas')
+      .evaluate((canvas: HTMLCanvasElement) => canvas.width);
+    expect(paper.width * 2).toBeGreaterThan(previewWidth * 2);
+    await expect(page.locator('.pdf-detail-layer')).toHaveCSS('transform', 'none');
+    expect(await samples()).toEqual([
+      [255, 0, 0, 255],
+      [0, 0, 255, 255],
+    ]);
+
+    await detail.evaluate((canvas) => canvas.setAttribute('data-test-old-detail', ''));
+    await page.getByRole('button', { name: '移動', exact: true }).click();
+    const y = stage.y + stage.height * 0.5;
+    await page.mouse.move(stage.x + stage.width * 0.2, y);
+    await page.mouse.down();
+    await page.mouse.move(stage.x + stage.width * 0.8, y, { steps: 8 });
+    await expect(detail).toHaveAttribute('data-test-old-detail', '');
+    await expect(page.locator('.pdf-detail-layer')).not.toHaveCSS('transform', 'none');
+    await page.mouse.up();
+    await expect(detail).not.toHaveAttribute('data-test-old-detail');
+    await expect(page.locator('.pdf-detail-layer')).toHaveCSS('transform', 'none');
+    expect(await samples()).toEqual([
+      [255, 0, 0, 255],
+      [255, 0, 0, 255],
+    ]);
+    await expect(page.locator('.pdf-loading')).toHaveCount(0);
+  });
 });

@@ -1,12 +1,16 @@
 import type { Tool } from './model';
 
 export type PencilTool = Exclude<Tool, 'hand'>;
+export const penWidths = [1, 2.5, 4, 7, 10];
+export const highlighterWidths = [5, 12.5, 20, 35, 50];
 export type InputPreferences = {
   fingerInk: boolean;
   palmRejection: boolean;
   twoFingerTap: boolean;
   presets: string[];
   highlighterPresets: string[];
+  penWidth: number;
+  highlighterWidth: number;
   laserWidth: number;
   eraserWidth: number;
 };
@@ -16,6 +20,8 @@ export const defaultInputPreferences: InputPreferences = {
   twoFingerTap: true,
   presets: ['#183e3a', '#cf4d44', '#447cbd'],
   highlighterPresets: ['#fff200', '#ff45bf', '#a6ff00'],
+  penWidth: 2.5,
+  highlighterWidth: 12.5,
   laserWidth: 4,
   eraserWidth: 28,
 };
@@ -34,6 +40,10 @@ export function loadInputPreferences(): InputPreferences {
       fingerInk: p.fingerInk === true,
       palmRejection: p.palmRejection !== false,
       twoFingerTap: p.twoFingerTap !== false,
+      penWidth: penWidths.includes(p.penWidth) ? p.penWidth : defaultInputPreferences.penWidth,
+      highlighterWidth: highlighterWidths.includes(p.highlighterWidth)
+        ? p.highlighterWidth
+        : defaultInputPreferences.highlighterWidth,
       laserWidth: [2, 4, 6, 8, 12].includes(p.laserWidth) ? p.laserWidth : 4,
       eraserWidth: [8, 16, 28, 48, 80].includes(p.eraserWidth) ? p.eraserWidth : 28,
       presets: readPresets(p.presets, defaultInputPreferences.presets),

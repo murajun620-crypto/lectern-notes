@@ -16,7 +16,7 @@ import { renderPage } from './pdf';
 import VideoBox from './VideoBox';
 import { effectiveTool, PalmGuard } from './input';
 import type { PencilTool } from './input';
-import { usePageViewport } from './usePageViewport';
+import { rasterScaleLimit, usePageViewport } from './usePageViewport';
 import { applyErasure } from './eraser';
 type Props = {
   page: Page;
@@ -62,6 +62,8 @@ export default function Stage({
 }: Props) {
   const viewport = useRef<HTMLDivElement>(null),
     paper = useRef<HTMLDivElement>(null),
+    backdrop = useRef<HTMLDivElement>(null),
+    detail = useRef<HTMLDivElement>(null),
     pdfCanvas = useRef<HTMLCanvasElement>(null),
     inkCanvas = useRef<HTMLCanvasElement>(null),
     laserCanvas = useRef<HTMLCanvasElement>(null),
@@ -130,6 +132,9 @@ export default function Stage({
     pan,
     interacting,
     rasterScale,
+    settled,
+    showDetail,
+    clearDetail,
     limit,
     begin: beginView,
     move: moveView,
@@ -137,6 +142,8 @@ export default function Stage({
     commitSoon,
   } = usePageViewport({
     paper,
+    backdrop,
+    detail,
     pageId: page.id,
     width: page.width,
     height: page.height,
@@ -230,12 +237,96 @@ export default function Stage({
           setLoading(false);
           onError(`PDF表示: ${(e as Error).message}`);
         }
+      })
+      .finally(() => {
+        temp.width = temp.height = 1;
       });
     return () => {
       cancelled = true;
       abort.abort();
     };
   }, [page.id, page.assetId, page.sourcePage, page.width, page.height, rasterScale, onError]);
+  const { id: pageId, assetId, sourcePage, width: pageWidth, height: pageHeight } = page;
+  useEffect(() => {
+    const deviceScale = devicePixelRatio || 1;
+    const displayScale = fit * zoom;
+    const pageFitsAtNativeResolution =
+      deviceScale <= 2 && displayScale * deviceScale <= rasterScaleLimit(pageWidth, pageHeight);
+    if (!assetId || (zoom === 1 && pageFitsAtNativeResolution)) {
+      clearDetail();
+      return;
+    }
+    const abort = new AbortController();
+    const timer = setTimeout(() => {
+      if (interacting.current) return;
+      const originX = (size.w - pageWidth * displayScale) / 2 + pan.x;
+      const originY = (size.h - pageHeight * displayScale) / 2 + pan.y;
+      const left = Math.max(0, originX);
+      const top = Math.max(0, originY);
+      const visibleWidth = Math.min(size.w, originX + pageWidth * displayScale) - left;
+      const visibleHeight = Math.min(size.h, originY + pageHeight * displayScale) - top;
+      if (visibleWidth <= 0 || visibleHeight <= 0) return;
+      const outputScale = Math.min(deviceScale, rasterScaleLimit(visibleWidth, visibleHeight));
+      const canvas = document.createElement('canvas');
+      let published = false;
+      canvas.style.left = `${left}px`;
+      canvas.style.top = `${top}px`;
+      canvas.style.width = `${visibleWidth}px`;
+      canvas.style.height = `${visibleHeight}px`;
+      const region = {
+        width: Math.max(1, Math.round(visibleWidth * outputScale)),
+        height: Math.max(1, Math.round(visibleHeight * outputScale)),
+        offsetX: (originX - left) * outputScale,
+        offsetY: (originY - top) * outputScale,
+      };
+      void renderPage(
+        { assetId, sourcePage, width: pageWidth, height: pageHeight },
+        canvas,
+        displayScale * outputScale,
+        abort.signal,
+        region,
+      )
+        .then(() => {
+          const current = view.current;
+          if (
+            !abort.signal.aborted &&
+            !interacting.current &&
+            current.zoom === zoom &&
+            current.pan.x === pan.x &&
+            current.pan.y === pan.y
+          ) {
+            showDetail(canvas);
+            published = true;
+          }
+        })
+        // The full-page bitmap stays visible if the device cannot render the detail layer.
+        .catch(() => {})
+        .finally(() => {
+          if (!published) canvas.width = canvas.height = 1;
+        });
+    }, 140);
+    return () => {
+      clearTimeout(timer);
+      abort.abort();
+    };
+  }, [
+    pageId,
+    assetId,
+    sourcePage,
+    pageWidth,
+    pageHeight,
+    fit,
+    zoom,
+    size.w,
+    size.h,
+    pan.x,
+    pan.y,
+    settled,
+    interacting,
+    view,
+    clearDetail,
+    showDetail,
+  ]);
   useLayoutEffect(() => {
     const canvas = inkCanvas.current!,
       s = rasterScale;
@@ -428,7 +519,7 @@ export default function Stage({
         id: uid(),
         tool: selectedTool as 'pen' | 'highlighter',
         color,
-        width: selectedTool === 'highlighter' ? width * 5 : width,
+        width,
         points: [p],
       };
       gesture.current.stroke = s;
@@ -890,16 +981,23 @@ export default function Stage({
       }}
     >
       <div
+        ref={backdrop}
+        className="pdf-backdrop"
+        aria-hidden="true"
+        style={{ width: page.width * fit, height: page.height * fit }}
+      >
+        <canvas ref={pdfCanvas} className="pdf-canvas" />
+      </div>
+      <div ref={detail} className="pdf-detail-layer" aria-hidden="true" />
+      <div
         ref={paper}
         className="pdf-page"
         data-testid="pdf-page"
         style={{
           width: page.width * fit,
           height: page.height * fit,
-          transform: `translate3d(${pan.x}px, ${pan.y}px, 0) scale(${zoom})`,
         }}
       >
-        <canvas ref={pdfCanvas} className="pdf-canvas" />
         <canvas ref={inkCanvas} className="ink-canvas" data-testid="ink-canvas" />
         {page.videos.map((v) => (
           <VideoBox

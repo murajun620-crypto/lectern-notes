@@ -65,20 +65,25 @@ export async function importPdf(file: File): Promise<Page[]> {
   }
 }
 export async function renderPage(
-  page: Page,
+  page: Pick<Page, 'assetId' | 'sourcePage' | 'width' | 'height'>,
   canvas: HTMLCanvasElement,
   scale: number,
   signal?: AbortSignal,
+  region?: { width: number; height: number; offsetX: number; offsetY: number },
 ) {
-  canvas.width = Math.max(1, Math.round(page.width * scale));
-  canvas.height = Math.max(1, Math.round(page.height * scale));
+  canvas.width = region?.width ?? Math.max(1, Math.round(page.width * scale));
+  canvas.height = region?.height ?? Math.max(1, Math.round(page.height * scale));
   const ctx = canvas.getContext('2d')!;
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
   if (page.assetId) {
     const pdfPage = await (await getPdf(page.assetId)).getPage(page.sourcePage!);
     signal?.throwIfAborted();
-    const task = pdfPage.render({ canvasContext: ctx, viewport: pdfPage.getViewport({ scale }) });
+    const task = pdfPage.render({
+      canvasContext: ctx,
+      viewport: pdfPage.getViewport({ scale }),
+      transform: region ? [1, 0, 0, 1, region.offsetX, region.offsetY] : undefined,
+    });
     const cancel = () => task.cancel();
     signal?.addEventListener('abort', cancel, { once: true });
     try {

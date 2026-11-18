@@ -128,7 +128,7 @@ test('small circles cut only their pixels in wide highlighter; fast sweeps, movi
 }) => {
   await demo(page);
   await page.getByRole('button', { name: '蛍光ペン', exact: true }).click();
-  await page.getByLabel('ペンの太さ', { exact: true }).selectOption('10');
+  await page.getByLabel('蛍光ペンの太さ', { exact: true }).selectOption('50');
   await line(page, 0.2, 0.55, 0.8, 0.55);
   await page.getByRole('button', { name: '消しゴム', exact: true }).click();
   await page.getByLabel('消しゴムのサイズ', { exact: true }).selectOption('8');
@@ -174,7 +174,7 @@ test('small circles cut only their pixels in wide highlighter; fast sweeps, movi
   expect((await stored(page)).every((p) => p.pages[0].strokes[0].erasures.length === 3)).toBe(true);
   // Sparse input forms a smooth quadratic well away from the raw control polygon.
   await page.getByRole('button', { name: '蛍光ペン', exact: true }).click();
-  await page.getByLabel('ペンの太さ', { exact: true }).selectOption('1');
+  await page.getByLabel('蛍光ペンの太さ', { exact: true }).selectOption('5');
   const curve = (await page.getByTestId('pdf-page').boundingBox())!;
   await page.mouse.move(curve.x + curve.width * 0.2, curve.y + curve.height * 0.2);
   await page.mouse.down();
