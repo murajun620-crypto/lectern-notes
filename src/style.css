@@ -1839,10 +1839,13 @@ body,
   border-bottom: 1px solid var(--line);
   font-size: 11px;
 }
-.preset-settings > div {
+.preset-palette + .preset-palette {
+  margin-top: 12px;
+}
+.preset-swatches {
   display: flex;
   gap: 12px;
-  margin-top: 10px;
+  margin-top: 6px;
 }
 .preset-settings label {
   gap: 4px;

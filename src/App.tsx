@@ -152,7 +152,11 @@ const tools: { id: Tool; label: string; icon: ReactNode; key: string }[] = [
   { id: 'select', label: '選択', icon: <MousePointer2 />, key: 'S' },
   { id: 'laser', label: 'レーザー', icon: <Sparkles />, key: 'L' },
 ];
-const colors = ['#183e3a', '#263957', '#cf4d44', '#d59827', '#447cbd', '#8659a5'];
+const inkPalettes = {
+  pen: { label: 'ペン', preference: 'presets' },
+  highlighter: { label: '蛍光ペン', preference: 'highlighterPresets' },
+} as const;
+type WritingTool = keyof typeof inkPalettes;
 type Dialog =
   | { kind: 'rename'; id: string; value: string }
   | { kind: 'delete'; id: string; name: string }
@@ -165,7 +169,10 @@ export default function App() {
     [project, setProject] = useState<Project | null>(null),
     [initialized, setInitialized] = useState(false);
   const [tool, setTool] = useState<Tool>('pen'),
-    [color, setColor] = useState(colors[0]),
+    [colorChoices, setColorChoices] = useState<Record<WritingTool, number | string>>({
+      pen: 0,
+      highlighter: 0,
+    }),
     [width, setWidth] = useState(2.5),
     [preferences, setPreferences] = useState(loadInputPreferences),
     [trail, setTrail] = useState(true),
@@ -175,9 +182,16 @@ export default function App() {
     [lecture, setLecture] = useState(false);
   const fingerInk = preferences.fingerInk;
   const pencilTool = useRef<PencilTool>('pen'),
-    lastWritingTool = useRef<'pen' | 'highlighter'>('pen');
+    lastWritingTool = useRef<WritingTool>('pen');
   if (tool !== 'hand') pencilTool.current = tool;
   if (tool === 'pen' || tool === 'highlighter') lastWritingTool.current = tool;
+  const writingTool = lastWritingTool.current;
+  const palette = inkPalettes[writingTool];
+  const presets = preferences[palette.preference];
+  const colorChoice = colorChoices[writingTool];
+  const color = typeof colorChoice === 'number' ? presets[colorChoice] : colorChoice;
+  const chooseColor = (choice: number | string) =>
+    setColorChoices((current) => ({ ...current, [writingTool]: choice }));
   const widthTool = tool === 'hand' ? pencilTool.current : tool;
   const toolWidth =
     widthTool === 'laser'
@@ -837,24 +851,24 @@ export default function App() {
               </>
             )}
             <div className="ink-settings">
-              <label className="color-picker" title="ペンの色">
+              <label className="color-picker" title={`${palette.label}の色`}>
                 <input
                   type="color"
-                  aria-label="ペンの色"
+                  aria-label={`${palette.label}の色`}
                   value={color}
-                  onChange={(e) => setColor(e.target.value)}
+                  onChange={(e) => chooseColor(e.target.value)}
                 />
                 <span style={{ background: color }} />
               </label>
-              {preferences.presets.map((c, i) => (
+              {presets.map((c, i) => (
                 <button
                   key={i}
                   className={`color-preset ${color === c ? 'chosen' : ''}`}
                   style={{ '--swatch': c } as React.CSSProperties}
-                  aria-label={`カラープリセット${i + 1}`}
+                  aria-label={`${palette.label}のカラープリセット${i + 1}`}
                   aria-pressed={color === c}
-                  title={`カラープリセット${i + 1}（入力設定で変更）`}
-                  onClick={() => setColor(c)}
+                  title={`${palette.label}のカラープリセット${i + 1}（入力設定で変更）`}
+                  onClick={() => chooseColor(i)}
                 />
               ))}
               <label className="width-select">
@@ -955,26 +969,32 @@ export default function App() {
                   Pencil本体のダブルタップはSafariの公開APIでは取得できません。画面への2本指タップを使えます。
                 </small>
                 <div className="preset-settings">
-                  <span>カラープリセット</span>
-                  <div>
-                    {preferences.presets.map((c, i) => (
-                      <label key={i}>
-                        <span>{i + 1}</span>
-                        <input
-                          type="color"
-                          aria-label={`プリセット${i + 1}の色を変更`}
-                          value={c}
-                          onChange={(e) => {
-                            const next = e.target.value;
-                            setPreferences((p) => ({
-                              ...p,
-                              presets: p.presets.map((color, j) => (i === j ? next : color)),
-                            }));
-                          }}
-                        />
-                      </label>
-                    ))}
-                  </div>
+                  {Object.values(inkPalettes).map(({ label, preference }) => (
+                    <div key={preference} className="preset-palette">
+                      <span>{label}のカラープリセット</span>
+                      <div className="preset-swatches">
+                        {preferences[preference].map((c, i) => (
+                          <label key={i}>
+                            <span>{i + 1}</span>
+                            <input
+                              type="color"
+                              aria-label={`${label}のプリセット${i + 1}の色を変更`}
+                              value={c}
+                              onChange={(e) => {
+                                const next = e.target.value;
+                                setPreferences((p) => ({
+                                  ...p,
+                                  [preference]: p[preference].map((color, j) =>
+                                    i === j ? next : color,
+                                  ),
+                                }));
+                              }}
+                            />
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
                 </div>
                 <label>
                   <input

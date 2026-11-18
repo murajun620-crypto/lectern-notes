@@ -6,6 +6,7 @@ export type InputPreferences = {
   palmRejection: boolean;
   twoFingerTap: boolean;
   presets: string[];
+  highlighterPresets: string[];
   laserWidth: number;
   eraserWidth: number;
 };
@@ -14,9 +15,18 @@ export const defaultInputPreferences: InputPreferences = {
   palmRejection: true,
   twoFingerTap: true,
   presets: ['#183e3a', '#cf4d44', '#447cbd'],
+  highlighterPresets: ['#fff200', '#ff45bf', '#a6ff00'],
   laserWidth: 4,
   eraserWidth: 28,
 };
+function readPresets(value: unknown, fallback: string[]): string[] {
+  return Array.isArray(value) &&
+    value.length === 3 &&
+    value.every((color) => typeof color === 'string' && /^#[0-9a-f]{6}$/i.test(color))
+    ? value
+    : [...fallback];
+}
+
 export function loadInputPreferences(): InputPreferences {
   try {
     const p = JSON.parse(localStorage.getItem('lectern.input') || '{}');
@@ -26,15 +36,14 @@ export function loadInputPreferences(): InputPreferences {
       twoFingerTap: p.twoFingerTap !== false,
       laserWidth: [2, 4, 6, 8, 12].includes(p.laserWidth) ? p.laserWidth : 4,
       eraserWidth: [8, 16, 28, 48, 80].includes(p.eraserWidth) ? p.eraserWidth : 28,
-      presets:
-        Array.isArray(p.presets) &&
-        p.presets.length === 3 &&
-        p.presets.every((c: unknown) => typeof c === 'string' && /^#[0-9a-f]{6}$/i.test(c))
-          ? p.presets
-          : [...defaultInputPreferences.presets],
+      presets: readPresets(p.presets, defaultInputPreferences.presets),
+      highlighterPresets: readPresets(
+        p.highlighterPresets,
+        defaultInputPreferences.highlighterPresets,
+      ),
     };
   } catch {
-    return { ...defaultInputPreferences, presets: [...defaultInputPreferences.presets] };
+    return defaultInputPreferences;
   }
 }
 export function effectiveTool(

@@ -336,12 +336,17 @@ test('Safari touch fallback flips pages while zoomed and never double-turns a Po
   await expect(page.getByLabel('ページ番号')).toHaveValue('3');
 });
 
-test('iPad-sized standalone layout keeps top buttons and three presets visible; fullscreen falls back to lecture', async ({
+test('iPad-sized layout preserves separate ink palettes through tool switching, lecture and reload', async ({
   page,
   browserName,
 }) => {
   await page.addInitScript(() => {
     Object.defineProperty(document, 'fullscreenEnabled', { get: () => false, configurable: true });
+    if (!localStorage.getItem('lectern.input'))
+      localStorage.setItem(
+        'lectern.input',
+        JSON.stringify({ presets: ['#183e3a', '#cf4d44', '#345678'] }),
+      );
   });
   await page.setViewportSize({ width: 1024, height: 768 });
   await demo(page);
@@ -356,34 +361,63 @@ test('iPad-sized standalone layout keeps top buttons and three presets visible; 
     expect(r.x + r.width).toBeLessThanOrEqual(1010);
     expect(r.y + r.height).toBeLessThan(748);
   }
-  for (let i = 1; i <= 3; i++)
-    await expect(
-      page.getByRole('button', { name: 'カラープリセット' + i, exact: true }),
-    ).toBeVisible();
-  await page.getByRole('button', { name: 'カラープリセット2', exact: true }).click();
+  const swatch = (tool: string, slot: number) =>
+    page.getByRole('button', { name: `${tool}のカラープリセット${slot}`, exact: true });
+  for (let i = 1; i <= 3; i++) await expect(swatch('ペン', i)).toBeVisible();
+  await expect(swatch('ペン', 3)).toHaveCSS('--swatch', '#345678');
+  await swatch('ペン', 2).click();
   await expect(page.getByLabel('ペンの色', { exact: true })).toHaveValue('#cf4d44');
   await page.getByLabel('入力設定', { exact: true }).click();
-  await page.getByLabel('プリセット2の色を変更').evaluate((el: HTMLInputElement) => {
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(el, '#00aa55');
-    el.dispatchEvent(new Event('input', { bubbles: true }));
-    el.dispatchEvent(new Event('change', { bubbles: true }));
-  });
-  await expect
-    .poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('lectern.input')!).presets[1]))
-    .toBe('#00aa55');
+  const changePreset = (label: string, color: string) =>
+    page.getByLabel(label, { exact: true }).evaluate((el: HTMLInputElement, value) => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(el, value);
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+    }, color);
+  await changePreset('ペンのプリセット2の色を変更', '#00aa55');
+  await expect(page.getByLabel('ペンの色', { exact: true })).toHaveValue('#00aa55');
   await page.getByRole('button', { name: '画面いっぱいの講義表示', exact: true }).click();
   await expect(page.locator('.app')).toHaveClass(/lecture/);
   await expect(page.getByRole('alert')).toHaveCount(0);
-  for (let i = 1; i <= 3; i++)
-    await expect(
-      page.getByRole('button', { name: 'カラープリセット' + i, exact: true }),
-    ).toBeVisible();
+  const highlighter = page.getByRole('button', { name: '蛍光ペン', exact: true });
+  await highlighter.click();
+  for (const [i, color] of ['#fff200', '#ff45bf', '#a6ff00'].entries()) {
+    await expect(swatch('蛍光ペン', i + 1)).toBeVisible();
+    await expect(swatch('蛍光ペン', i + 1)).toHaveCSS('--swatch', color);
+  }
+  await swatch('蛍光ペン', 2).click();
+  const paper = (await page.getByTestId('pdf-page').boundingBox())!;
+  const draw = async (fraction: number) => {
+    const y = paper.y + paper.height * fraction;
+    await page.mouse.move(paper.x + paper.width * 0.25, y);
+    await page.mouse.down();
+    await page.mouse.move(paper.x + paper.width * 0.65, y, { steps: 8 });
+    await page.mouse.up();
+  };
+  await draw(0.4);
+  await page.getByRole('button', { name: 'ペン', exact: true }).click();
+  await expect(swatch('ペン', 2)).toHaveAttribute('aria-pressed', 'true');
+  await draw(0.6);
+  await highlighter.click();
+  await expect(swatch('蛍光ペン', 2)).toHaveAttribute('aria-pressed', 'true');
+  await expect
+    .poll(async () => {
+      const strokes = (await stored(page))[0].pages[0].strokes;
+      return strokes.map(({ tool, color }: { tool: string; color: string }) => [tool, color]);
+    })
+    .toEqual([
+      ['highlighter', '#ff45bf'],
+      ['pen', '#00aa55'],
+    ]);
+  await page.getByLabel('入力設定', { exact: true }).click();
+  await changePreset('蛍光ペンのプリセット2の色を変更', '#ff7a20');
+  await expect(swatch('蛍光ペン', 2)).toHaveCSS('--swatch', '#ff7a20');
+  await page.getByLabel('入力設定', { exact: true }).click();
   await page.screenshot({ path: `artifacts/ipad-layout-${browserName}.png` });
   await page.reload();
-  await expect(page.getByRole('button', { name: 'カラープリセット2', exact: true })).toHaveCSS(
-    '--swatch',
-    '#00aa55',
-  );
+  await expect(swatch('ペン', 2)).toHaveCSS('--swatch', '#00aa55');
+  await highlighter.click();
+  await expect(swatch('蛍光ペン', 2)).toHaveCSS('--swatch', '#ff7a20');
 });
 
 test('a small Shorts placement plays upright at the saved size and can enlarge on demand', async ({
