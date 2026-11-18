@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { effectiveTool, PalmGuard } from './input';
-import { initialVideoRect, playbackRect } from './video-layout';
+import { enlargedVideoRect, initialVideoRect, playerViewport, resizeVideo } from './video-layout';
 import { penOutline, drawLaser } from './model';
 describe('automatic Pencil and finger routing', () => {
   it('keeps the last Pencil tool while hand mode remains available to mouse', () => {
@@ -65,13 +65,23 @@ describe('small thumbnail and independent playback geometry', () => {
       expect(r.height).toBe(90);
     }
   });
-  it('keeps a minimum-size player inside the paper without mutating stored thumbnail size', () => {
+  it('keeps the iframe viewport sized for its controls while fitting a small portrait placement', () => {
+    const page = { width: 595.28, height: 841.89 };
+    const v = { id: 'v', videoId: 'M7lc1UVf-VE', ...initialVideoRect(page, true) };
+    const small = resizeVideo(v, page, 0.01);
+    expect(small.width).toBe(36);
+    expect(small.height).toBe(64);
+    const player = playerViewport(small, 0.8, 2);
+    expect(player.width).toBeGreaterThanOrEqual(200);
+    expect(player.height / player.width).toBeCloseTo(16 / 9);
+  });
+  it('keeps optional enlargement inside the paper without changing stored placement', () => {
     const v = { id: 'v', videoId: 'M7lc1UVf-VE', x: 500, y: 780, width: 64, height: 36 };
-    const r = playbackRect(v, { width: 450, height: 636 }, { width: 595.28, height: 841.89 });
-    expect(r.width).toBeGreaterThanOrEqual(240);
-    expect(r.height).toBeGreaterThanOrEqual(200);
-    expect(r.left + r.width).toBeLessThanOrEqual(450);
-    expect(r.top + r.height).toBeLessThanOrEqual(636);
+    const r = enlargedVideoRect(v, { width: 595.28, height: 841.89 }, 0.75);
+    expect(r.width / r.height).toBeCloseTo(16 / 9);
+    expect(r.width * 0.75).toBeCloseTo(360);
+    expect(r.x + r.width).toBeLessThanOrEqual(595.28);
+    expect(r.y + r.height).toBeLessThanOrEqual(841.89);
     expect(v.width).toBe(64);
   });
 });

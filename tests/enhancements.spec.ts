@@ -386,33 +386,50 @@ test('iPad-sized standalone layout keeps top buttons and three presets visible; 
   );
 });
 
-test('tiny YouTube thumbnails expand only for inline playback and restore their saved size', async ({
+test('a small Shorts placement plays upright at the saved size and can enlarge on demand', async ({
   page,
 }) => {
   await mockYoutube(page);
   await demo(page);
   await page.getByRole('button', { name: 'YouTube挿入' }).click();
-  await page.getByLabel('YouTube URL').fill('https://youtu.be/M7lc1UVf-VE');
+  await page
+    .getByLabel('YouTube URL')
+    .fill('https://www.youtube.com/shorts/M7lc1UVf-VE?si=example');
   await page.getByRole('button', { name: 'このページに追加' }).click();
   await expect(page.getByTestId('video-box')).toBeVisible();
-  await expect.poll(async () => (await stored(page))[0].pages[0].videos[0]?.width).toBe(160);
+  await expect.poll(async () => (await stored(page))[0].pages[0].videos[0]?.height).toBe(160);
+  await page.getByTitle('動画を横長にする', { exact: true }).click();
+  await expect.poll(async () => (await stored(page))[0].pages[0].videos[0].width).toBe(160);
+  await page.getByTitle('動画を縦長にする', { exact: true }).click();
   for (let i = 0; i < 4; i++) await page.getByTitle('サムネイルを小さく', { exact: true }).click();
-  await expect.poll(async () => (await stored(page))[0].pages[0].videos[0].width).toBe(64);
+  await expect.poll(async () => (await stored(page))[0].pages[0].videos[0].height).toBeCloseTo(64);
+  const savedVideo = (await stored(page))[0].pages[0].videos[0];
+  await page.getByRole('button', { name: '講義を始める', exact: true }).click();
   const before = (await page.getByTestId('video-box').boundingBox())!;
   expect(before.width).toBeLessThan(80);
+  expect(before.width / before.height).toBeCloseTo(9 / 16);
   await page.getByRole('button', { name: '動画をページ内で再生' }).click();
   await expect(page.getByTitle('YouTube動画', { exact: true })).toBeVisible();
-  const r = (await page.getByTitle('YouTube動画', { exact: true }).boundingBox())!,
-    paper = (await page.getByTestId('pdf-page').boundingBox())!;
-  expect(r.width).toBeGreaterThanOrEqual(240);
-  expect(r.height).toBeGreaterThanOrEqual(200);
-  expect(r.x + r.width).toBeLessThanOrEqual(paper.x + paper.width + 1);
-  expect(r.y + r.height).toBeLessThanOrEqual(paper.y + paper.height + 1);
+  const iframe = page.getByTitle('YouTube動画', { exact: true });
+  const r = (await iframe.boundingBox())!;
+  expect(r.width).toBeCloseTo(before.width, 0);
+  expect(r.height).toBeCloseTo(before.height, 0);
+  expect(r.x).toBeCloseTo(before.x, 0);
+  expect(r.y).toBeCloseTo(before.y, 0);
+  expect(await iframe.evaluate((el) => el.clientWidth)).toBeGreaterThanOrEqual(200);
+  await iframe.evaluate((el) => el.setAttribute('data-instance', 'original'));
+  await page.getByTitle('動画を拡大', { exact: true }).click();
+  const big = (await iframe.boundingBox())!;
+  expect(big.width).toBeGreaterThan(160);
+  expect(big.width / big.height).toBeCloseTo(9 / 16);
+  await page.getByTitle('配置サイズに戻す', { exact: true }).click();
+  expect((await iframe.boundingBox())!.width).toBeCloseTo(before.width, 0);
+  await expect(iframe).toHaveAttribute('data-instance', 'original');
   await page.getByTitle('動画を閉じる', { exact: true }).click();
   expect((await page.getByTestId('video-box').boundingBox())!.width).toBeCloseTo(before.width, 0);
   await page.reload();
   await expect(page.getByTestId('video-box')).toBeVisible();
-  expect((await stored(page))[0].pages[0].videos[0].width).toBe(64);
+  expect((await stored(page))[0].pages[0].videos[0]).toEqual(savedVideo);
 });
 
 test('update check handles latest, offline and a saved reload without losing notes', async ({

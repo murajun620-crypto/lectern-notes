@@ -45,18 +45,20 @@ export const blankPage = (width = A4.width, height = A4.height): Page => ({
   videos: [],
 });
 export const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
-export function youtubeId(raw: string): string | null {
+export function parseYoutubeUrl(raw: string) {
   try {
     const url = new URL(raw.trim());
     if (!['https:', 'http:'].includes(url.protocol)) return null;
     const host = url.hostname.replace(/^www\.|^m\./, '');
+    const [, route, pathId] = url.pathname.split('/');
+    let portrait = false;
     let id: string | null = null;
-    if (host === 'youtu.be') id = url.pathname.split('/')[1];
-    if (host === 'youtube.com' || host === 'youtube-nocookie.com')
-      id =
-        url.searchParams.get('v') ||
-        (/^\/(embed|shorts|live)\//.test(url.pathname) ? url.pathname.split('/')[2] : null);
-    return id && /^[\w-]{11}$/.test(id) ? id : null;
+    if (host === 'youtu.be') id = route;
+    if (host === 'youtube.com' || host === 'youtube-nocookie.com') {
+      portrait = route === 'shorts';
+      id = ['embed', 'shorts', 'live'].includes(route) ? pathId : url.searchParams.get('v');
+    }
+    return id && /^[\w-]{11}$/.test(id) ? { id, portrait } : null;
   } catch {
     return null;
   }

@@ -907,6 +907,7 @@ export default function Stage({
             video={v}
             page={page}
             editing={!lecture && tool === 'hand'}
+            pageScale={fit}
             displayZoom={zoom}
             onChange={changeVideo}
             onDelete={() =>

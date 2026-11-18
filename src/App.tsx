@@ -39,7 +39,7 @@ import {
   ArrowUpRight,
 } from 'lucide-react';
 import type { Page, Project, Tool } from './model';
-import { blankPage, clamp, drawStrokes, uid, youtubeId } from './model';
+import { blankPage, clamp, drawStrokes, parseYoutubeUrl, uid } from './model';
 import {
   deleteProject,
   download,
@@ -475,8 +475,8 @@ export default function App() {
     });
   const insertVideo = (e: FormEvent) => {
     e.preventDefault();
-    const id = youtubeId(videoUrl);
-    if (!id) {
+    const source = parseYoutubeUrl(videoUrl);
+    if (!source) {
       setVideoError(
         '有効なYouTube URLを入力してください。watch / youtu.be / shortsに対応しています。',
       );
@@ -489,8 +489,8 @@ export default function App() {
         ...page.videos,
         {
           id: uid(),
-          videoId: id,
-          ...initialVideoRect(page),
+          videoId: source.id,
+          ...initialVideoRect(page, source.portrait),
         },
       ],
     });

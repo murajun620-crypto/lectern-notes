@@ -1,19 +1,26 @@
 import { describe, expect, it } from 'vitest';
-import { blankPage, pointInPolygon, segmentDistance, strokeHit, youtubeId } from './model';
+import { blankPage, parseYoutubeUrl, pointInPolygon, segmentDistance, strokeHit } from './model';
 import { validateProject } from './storage';
 describe('YouTube URL safety', () => {
   it.each([
     'https://youtu.be/M7lc1UVf-VE?t=3',
     'https://www.youtube.com/watch?v=M7lc1UVf-VE&x=1',
-    'https://m.youtube.com/shorts/M7lc1UVf-VE',
     'https://www.youtube-nocookie.com/embed/M7lc1UVf-VE',
-  ])('accepts %s', (url) => expect(youtubeId(url)).toBe('M7lc1UVf-VE'));
+  ])('accepts %s', (url) =>
+    expect(parseYoutubeUrl(url)).toEqual({ id: 'M7lc1UVf-VE', portrait: false }),
+  );
+  it('recognizes a Shorts share URL as portrait', () => {
+    expect(parseYoutubeUrl('https://m.youtube.com/shorts/M7lc1UVf-VE?si=example')).toEqual({
+      id: 'M7lc1UVf-VE',
+      portrait: true,
+    });
+  });
   it.each([
     'https://youtube.com.evil.example/watch?v=M7lc1UVf-VE',
     'javascript:alert(1)',
     'https://example.com/M7lc1UVf-VE',
     'https://youtube.com/watch?v=bad',
-  ])('rejects %s', (url) => expect(youtubeId(url)).toBeNull());
+  ])('rejects %s', (url) => expect(parseYoutubeUrl(url)).toBeNull());
 });
 describe('page-space geometry', () => {
   it('hits segments between sparse pointer samples', () => {

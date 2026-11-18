@@ -1,8 +1,18 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { Play, X, GripHorizontal, ExternalLink, Trash2, Maximize2, Minus } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import {
+  Play,
+  X,
+  GripHorizontal,
+  ExternalLink,
+  Trash2,
+  Maximize2,
+  Minimize2,
+  Minus,
+  RotateCw,
+} from 'lucide-react';
 import { clamp } from './model';
 import type { Video, Page } from './model';
-import { playbackRect } from './video-layout';
+import { enlargedVideoRect, playerViewport, resizeVideo, rotateVideo } from './video-layout';
 type Player = {
   destroy(): void;
   playVideo(): void;
@@ -54,6 +64,7 @@ export default function VideoBox({
   video: v,
   page,
   editing,
+  pageScale,
   displayZoom = 1,
   onChange,
   onDelete,
@@ -61,11 +72,13 @@ export default function VideoBox({
   video: Video;
   page: Page;
   editing: boolean;
+  pageScale: number;
   displayZoom?: number;
   onChange: (v: Video) => void;
   onDelete: () => void;
 }) {
   const [playing, setPlaying] = useState(false),
+    [enlarged, setEnlarged] = useState(false),
     [error, setError] = useState(''),
     [ready, setReady] = useState(false),
     [blocked, setBlocked] = useState(false),
@@ -76,26 +89,17 @@ export default function VideoBox({
     x: number;
     y: number;
     video: Video;
-    resize: boolean;
     rect: DOMRect;
   } | null>(null);
   const [preview, setPreview] = useState<Video | null>(null),
     previewRef = useRef<Video | null>(null);
-  const shown = preview || v;
-  const box = useRef<HTMLDivElement>(null);
-  const [paperSize, setPaperSize] = useState({ width: 0, height: 0 });
-  useLayoutEffect(() => {
-    const parent = box.current!.parentElement!;
-    const resize = () => {
-      const style = getComputedStyle(parent);
-      setPaperSize({ width: parseFloat(style.width), height: parseFloat(style.height) });
-    };
-    resize();
-    const observer = new ResizeObserver(resize);
-    observer.observe(parent);
-    return () => observer.disconnect();
-  }, []);
-  const compact = shown.width * (paperSize.width / page.width) * displayZoom < 180;
+  const larger = playing ? enlargedVideoRect(v, page, pageScale * displayZoom) : v;
+  const shown = playing && enlarged ? larger : preview || v;
+  const compact = shown.width * pageScale * displayZoom < 180;
+  const align = shown.x + shown.width / 2 > page.width / 2 ? 'right' : 'left';
+  const actionsBelow = shown.y * pageScale < 30;
+  const statusAbove = shown.y > page.height - shown.y - shown.height;
+  const statusBesideActions = statusAbove !== actionsBelow;
   const showPreview = (next: Video | null) => {
     previewRef.current = next;
     setPreview(next);
@@ -107,6 +111,7 @@ export default function VideoBox({
     setError('');
     setReady(false);
     setBlocked(false);
+    setPlaybackState(-1);
     void loadApi()
       .then((YT) => {
         if (cancelled || !host.current) return;
@@ -177,20 +182,15 @@ export default function VideoBox({
   }, [playing, v.videoId]);
   return (
     <div
-      ref={box}
       className={`video-box ${playing ? 'playing' : ''} ${editing ? 'editable' : ''} ${compact ? 'compact' : ''}`}
       data-testid="video-box"
       data-player-state={playbackState}
-      style={
-        playing && paperSize.width
-          ? playbackRect(v, paperSize, page, displayZoom)
-          : {
-              left: `${(shown.x / page.width) * 100}%`,
-              top: `${(shown.y / page.height) * 100}%`,
-              width: `${(shown.width / page.width) * 100}%`,
-              height: `${(shown.height / page.height) * 100}%`,
-            }
-      }
+      style={{
+        left: `${(shown.x / page.width) * 100}%`,
+        top: `${(shown.y / page.height) * 100}%`,
+        width: `${(shown.width / page.width) * 100}%`,
+        height: `${(shown.height / page.height) * 100}%`,
+      }}
       onPointerDown={(e) => e.stopPropagation()}
       onLostPointerCapture={() => {
         showPreview(null);
@@ -202,31 +202,51 @@ export default function VideoBox({
           <div
             ref={host}
             className="player-host"
-            // Keep the iframe's own viewport at its screen size, including YouTube's minimum.
-            style={{
-              width: `${displayZoom * 100}%`,
-              height: `${displayZoom * 100}%`,
-              transform: `scale(${1 / displayZoom})`,
-              transformOrigin: 'top left',
-            }}
+            style={playerViewport(shown, pageScale, displayZoom)}
           />
-          {!ready && !error && <span className="video-loading">YouTubeに接続中…</span>}
-          {blocked && !error && <span className="video-hint">動画内の ▶ をタップしてください</span>}
-          {error && (
-            <div className="video-error">
-              <p>{error}</p>
-              <a
-                href={`https://www.youtube.com/watch?v=${v.videoId}`}
-                target="_blank"
-                rel="noopener noreferrer"
+          <div className={`video-playback-actions ${align} ${actionsBelow ? 'below' : ''}`}>
+            {(enlarged || larger.width > v.width + 0.01) && !error && (
+              <button
+                type="button"
+                title={enlarged ? '配置サイズに戻す' : '動画を拡大'}
+                onClick={() => setEnlarged((value) => !value)}
               >
-                YouTubeで開く <ExternalLink size={14} />
-              </a>
+                {enlarged ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+              </button>
+            )}
+            <button
+              type="button"
+              title="動画を閉じる"
+              onClick={() => {
+                setPlaying(false);
+                setEnlarged(false);
+              }}
+            >
+              <X size={18} />
+            </button>
+          </div>
+          {(error || blocked || !ready) && (
+            <div
+              className={`video-status ${align} ${statusAbove ? 'above' : ''} ${statusBesideActions ? 'with-actions' : ''}`}
+            >
+              {error ? (
+                <div className="video-error" role="alert">
+                  <p>{error}</p>
+                  <a
+                    href={`https://www.youtube.com/watch?v=${v.videoId}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    YouTubeで開く <ExternalLink size={14} />
+                  </a>
+                </div>
+              ) : (
+                <span role="status">
+                  {blocked ? '動画内の ▶ をタップしてください' : 'YouTubeに接続中…'}
+                </span>
+              )}
             </div>
           )}
-          <button className="video-close" title="動画を閉じる" onClick={() => setPlaying(false)}>
-            <X size={18} />
-          </button>
         </>
       ) : (
         <button
@@ -261,7 +281,6 @@ export default function VideoBox({
                 x: e.clientX,
                 y: e.clientY,
                 video: v,
-                resize: false,
                 rect: e.currentTarget.closest('.pdf-page')!.getBoundingClientRect(),
               };
             }}
@@ -295,13 +314,16 @@ export default function VideoBox({
             <GripHorizontal size={16} />
             <span>移動</span>
             <button
+              title={v.width >= v.height ? '動画を縦長にする' : '動画を横長にする'}
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={() => onChange(rotateVideo(v, page))}
+            >
+              <RotateCw size={15} />
+            </button>
+            <button
               title="サムネイルを小さく"
               onPointerDown={(e) => e.stopPropagation()}
-              onClick={() => {
-                const width = Math.min(v.width, Math.max(64, v.width * 0.7)),
-                  height = Math.min(v.height, Math.max(36, v.height * 0.7));
-                onChange({ ...v, width, height });
-              }}
+              onClick={() => onChange(resizeVideo(v, page, 0.7))}
             >
               <Minus size={15} />
             </button>
@@ -323,26 +345,17 @@ export default function VideoBox({
                 x: e.clientX,
                 y: e.clientY,
                 video: v,
-                resize: true,
                 rect: e.currentTarget.closest('.pdf-page')!.getBoundingClientRect(),
               };
             }}
             onPointerMove={(e) => {
               const d = drag.current;
               if (!d) return;
-              showPreview({
-                ...d.video,
-                width: clamp(
-                  d.video.width + ((e.clientX - d.x) * page.width) / d.rect.width,
-                  Math.min(64, page.width - d.video.x),
-                  page.width - d.video.x,
-                ),
-                height: clamp(
-                  d.video.height + ((e.clientY - d.y) * page.height) / d.rect.height,
-                  Math.min(36, page.height - d.video.y),
-                  page.height - d.video.y,
-                ),
-              });
+              const dx = ((e.clientX - d.x) * page.width) / d.rect.width;
+              const dy = ((e.clientY - d.y) * page.height) / d.rect.height;
+              const { width, height } = d.video;
+              const factor = 1 + (dx * width + dy * height) / (width ** 2 + height ** 2);
+              showPreview(resizeVideo(d.video, page, factor));
             }}
             onPointerUp={() => {
               if (previewRef.current) onChange(previewRef.current);

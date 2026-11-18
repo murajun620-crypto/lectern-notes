@@ -206,20 +206,20 @@ test('video placement and inline player stay aligned after compositor zoom', asy
   await page.getByRole('button', { name: '動画をページ内で再生' }).click();
   await expect(page.getByTitle('YouTube動画', { exact: true })).toBeVisible();
   let player = (await page.getByTitle('YouTube動画', { exact: true }).boundingBox())!;
-  expect(player.width).toBeGreaterThanOrEqual(239);
-  expect(player.height).toBeGreaterThanOrEqual(199);
+  expect(player.width).toBeCloseTo(thumb.width, 0);
+  expect(player.height).toBeCloseTo(thumb.height, 0);
   const iframeViewport = () =>
     page.getByTitle('YouTube動画', { exact: true }).evaluate((el) => ({
       width: el.clientWidth,
       height: el.clientHeight,
     }));
-  expect((await iframeViewport()).width).toBeGreaterThanOrEqual(239);
-  expect((await iframeViewport()).height).toBeGreaterThanOrEqual(199);
+  expect((await iframeViewport()).width).toBeGreaterThanOrEqual(200);
+  expect((await iframeViewport()).height).toBeGreaterThanOrEqual(200);
   await page.getByLabel('表示倍率').selectOption('1.5');
   player = (await page.getByTitle('YouTube動画', { exact: true }).boundingBox())!;
-  expect(player.width).toBeGreaterThanOrEqual(239);
-  expect(player.height).toBeGreaterThanOrEqual(199);
-  expect((await iframeViewport()).height).toBeGreaterThanOrEqual(199);
+  expect(player.width).toBeCloseTo(thumb.width * 0.75, 0);
+  expect(player.height).toBeCloseTo(thumb.height * 0.75, 0);
+  expect((await iframeViewport()).height).toBeGreaterThanOrEqual(200);
   expect(await page.evaluate(() => (window as any).__playerCount)).toBe(1);
   await page.getByTitle('動画を閉じる', { exact: true }).click();
   expect((await projects(page))[0].pages[0].videos[0]).toEqual(v);
