@@ -1,0 +1,13 @@
+node_modules/
+dist/
+test-results/
+playwright-report/
+*.local
+.env*
+!.env.example
+*.lecture.zip
+artifacts/
+public/cmaps/
+public/standard_fonts/
+*.tsbuildinfo
+.pnpm-store/
