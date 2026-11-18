@@ -372,6 +372,15 @@ test('touch navigation, pinch and pressure-bearing pen input in landscape', asyn
   await expect
     .poll(async () => Number(await page.getByLabel('表示倍率').inputValue()))
     .toBeGreaterThan(1.5);
+  // A real one-finger swipe must also turn a zoomed page, then return exactly one page.
+  await touch('touchStart', [{ x: cx + 80, y: cy, id: 3 }]);
+  await touch('touchMove', [{ x: cx - 80, y: cy, id: 3 }]);
+  await touch('touchEnd', []);
+  await expect(page.getByLabel('ページ番号')).toHaveValue('3');
+  await touch('touchStart', [{ x: cx - 80, y: cy, id: 4 }]);
+  await touch('touchMove', [{ x: cx + 80, y: cy, id: 4 }]);
+  await touch('touchEnd', []);
+  await expect(page.getByLabel('ページ番号')).toHaveValue('2');
   await page.getByLabel('表示倍率').selectOption('1');
   r = (await page.getByTestId('pdf-page').boundingBox())!;
   await session.send('Input.dispatchMouseEvent', {

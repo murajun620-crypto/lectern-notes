@@ -10,6 +10,33 @@ await page.getByRole('button', { name: 'まずは3ページのサンプルで試
 await page.getByTestId('pdf-page').waitFor();
 await page.getByText('ページを読み込み中…', { exact: true }).waitFor({ state: 'hidden' });
 await page.screenshot({ path: 'artifacts/editor.png' });
+if (process.argv.includes('--ink')) {
+  const r = await page.getByTestId('pdf-page').boundingBox();
+  await page.getByLabel('ペンの太さ').selectOption('4');
+  await page.mouse.move(r.x + r.width * 0.18, r.y + r.height * 0.42);
+  await page.mouse.down();
+  for (let i = 0; i <= 110; i++) {
+    const t = i / 110;
+    await page.mouse.move(
+      r.x + r.width * (0.18 + 0.62 * t),
+      r.y + r.height * 0.42 + Math.sin(t * Math.PI * 6) * 22,
+    );
+  }
+  await page.mouse.up();
+  await page.screenshot({ path: 'artifacts/smooth-ink.png' });
+  await page.getByRole('button', { name: 'レーザー', exact: true }).click();
+  await page.mouse.move(r.x + r.width * 0.2, r.y + r.height * 0.7);
+  await page.mouse.down();
+  for (let i = 0; i <= 32; i++) {
+    const t = i / 32;
+    await page.mouse.move(
+      r.x + r.width * (0.2 + 0.6 * t),
+      r.y + r.height * 0.7 + Math.sin(t * Math.PI * 2) * 26,
+    );
+  }
+  await page.screenshot({ path: 'artifacts/smooth-laser.png' });
+  await page.mouse.up();
+}
 if (process.argv.includes('--youtube')) {
   await page.getByRole('button', { name: 'YouTube挿入' }).click();
   await page.getByLabel('YouTube URL').fill('https://youtu.be/M7lc1UVf-VE');

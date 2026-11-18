@@ -1739,3 +1739,203 @@ dialog > p {
     transition: none !important;
   }
 }
+
+/* Standalone iPad windows include the status bar and home indicator in the viewport. */
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+.app {
+  height: var(--app-height, 100dvh);
+  min-height: 0;
+  padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px)
+    env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
+}
+.editor-header {
+  height: auto;
+  min-height: 70px;
+  padding-top: 8px;
+  padding-bottom: 8px;
+  flex-wrap: wrap;
+}
+.document-title {
+  min-width: 0;
+}
+.header-end {
+  flex-shrink: 0;
+}
+.toolbar {
+  flex-wrap: wrap;
+}
+.tool-group,
+.ink-settings,
+.history-tools {
+  flex-shrink: 0;
+}
+.lecture .editor-header {
+  height: auto;
+  min-height: 53px;
+  padding-top: 4px;
+  padding-bottom: 4px;
+}
+.lecture .ink-settings {
+  display: flex;
+}
+.color-preset {
+  display: block;
+  position: relative;
+  flex-shrink: 0;
+  width: 32px;
+  height: 44px;
+  border-radius: 6px;
+  padding: 0;
+}
+.color-preset:after {
+  content: '';
+  position: absolute;
+  width: 19px;
+  height: 19px;
+  left: 6px;
+  top: 12px;
+  background: var(--swatch);
+  border: 2px solid #fff;
+  border-radius: 50%;
+  outline: 1px solid transparent;
+}
+.color-preset.chosen:after {
+  outline-color: var(--swatch);
+}
+.color-picker {
+  width: 28px;
+  height: 44px;
+}
+.color-picker > span {
+  margin-top: 11px;
+}
+.ink-settings {
+  gap: 3px;
+}
+.settings-dropdown {
+  max-height: calc(var(--app-height, 100dvh) - 180px);
+  overflow: auto;
+}
+.preset-settings {
+  margin: 15px 0;
+  padding: 13px 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  font-size: 11px;
+}
+.preset-settings > div {
+  display: flex;
+  gap: 12px;
+  margin-top: 10px;
+}
+.preset-settings label {
+  gap: 4px;
+  margin: 0;
+}
+.preset-settings input[type='color'] {
+  width: 42px;
+  height: 36px;
+  padding: 2px;
+  border: 1px solid var(--line);
+  background: #fff;
+  border-radius: 5px;
+}
+.video-box.compact .play-badge {
+  width: 29px;
+  height: 29px;
+}
+.video-box.compact .play-badge svg {
+  width: 16px;
+  height: 16px;
+}
+.video-box.compact .video-label {
+  font-size: 8px;
+  padding: 8px 5px 3px;
+}
+.video-box.compact .video-label > span {
+  display: none;
+}
+.video-box.compact .video-handle {
+  padding: 0 3px;
+  gap: 2px;
+}
+.video-box.compact .video-handle > span {
+  display: none;
+}
+.video-handle button {
+  min-width: 26px;
+  justify-content: center;
+}
+.video-handle button + button {
+  margin-left: 0;
+}
+.video-handle {
+  min-width: 82px;
+}
+.library-header-end {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+}
+.update-button {
+  font-size: 11px;
+}
+.update-status {
+  text-align: center;
+  line-height: 1.9;
+  padding: 15px 0 0;
+  color: #477354;
+}
+.update-status > svg {
+  margin: 5px auto 15px;
+}
+.update-status h3 {
+  font-size: 16px;
+  margin-bottom: 9px;
+}
+.update-status p {
+  font-size: 12px;
+  color: #7c8975;
+}
+@media (max-width: 850px) {
+  .library-header-end {
+    gap: 8px;
+  }
+  .library-header-end > .local-label {
+    display: none;
+  }
+}
+.video-resize {
+  width: 32px;
+  height: 32px;
+  right: -12px;
+  bottom: -12px;
+}
+@media (max-width: 700px) {
+  .editor-header {
+    min-height: 62px;
+    column-gap: 4px;
+  }
+  .header-end {
+    gap: 5px;
+    flex-wrap: wrap;
+  }
+  .editor-header > .document-title {
+    flex: 1;
+    max-width: none;
+  }
+  .header-end .secondary,
+  .lecture-button {
+    min-height: 40px;
+  }
+  .lecture .toolbar {
+    flex-wrap: wrap;
+  }
+}

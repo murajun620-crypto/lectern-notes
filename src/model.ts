@@ -1,3 +1,4 @@
+import { getStroke } from 'perfect-freehand';
 export type Tool = 'pen' | 'highlighter' | 'eraser' | 'select' | 'laser' | 'hand';
 export type Point = { x: number; y: number; p: number };
 export type Stroke = {
@@ -81,7 +82,65 @@ export function strokeHit(stroke: Stroke, point: Point, radius: number) {
       : Math.hypot(point.x - p.x, point.y - p.y) <= radius + stroke.width / 2,
   );
 }
-export function drawStrokes(ctx: CanvasRenderingContext2D, strokes: Stroke[]) {
+export function penOutline(stroke: Stroke, draft = false) {
+  return getStroke(
+    stroke.points.map((p) => [p.x, p.y, p.p]),
+    {
+      size: stroke.width,
+      thinning: 0.55,
+      smoothing: 0.65,
+      streamline: 0.2,
+      simulatePressure: false,
+      last: !draft,
+    },
+  );
+}
+export function traceCurve(ctx: CanvasRenderingContext2D, points: { x: number; y: number }[]) {
+  if (!points.length) return;
+  ctx.moveTo(points[0].x, points[0].y);
+  for (let i = 1; i < points.length - 1; i++) {
+    const p = points[i],
+      next = points[i + 1];
+    ctx.quadraticCurveTo(p.x, p.y, (p.x + next.x) / 2, (p.y + next.y) / 2);
+  }
+  const last = points.at(-1)!;
+  ctx.lineTo(last.x, last.y);
+}
+export function drawLaser(
+  ctx: CanvasRenderingContext2D,
+  points: { x: number; y: number; t: number }[],
+  scale: number,
+  now: number,
+  trail: boolean,
+) {
+  const head = points.at(-1);
+  if (!head) return;
+  const opacity = clamp(1 - (now - head.t) / (trail ? 700 : 130), 0, 1);
+  ctx.save();
+  if (trail && points.length > 1) {
+    ctx.globalAlpha = opacity * 0.55;
+    ctx.strokeStyle = '#fb403b';
+    ctx.lineWidth = 4 / scale;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.beginPath();
+    traceCurve(ctx, points);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = opacity;
+  ctx.shadowColor = '#fa3939';
+  ctx.shadowBlur = 12;
+  ctx.fillStyle = '#ff3c3c';
+  ctx.beginPath();
+  ctx.arc(head.x, head.y, 6 / scale, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = 'white';
+  ctx.lineWidth = 1.5 / scale;
+  ctx.stroke();
+  ctx.restore();
+}
+export function drawStrokes(ctx: CanvasRenderingContext2D, strokes: Stroke[], draft = false) {
   for (const stroke of strokes) {
     if (!stroke.points.length) continue;
     // One composited path per highlighter prevents dark joints inside a single stroke.
@@ -94,23 +153,23 @@ export function drawStrokes(ctx: CanvasRenderingContext2D, strokes: Stroke[]) {
       ctx.globalAlpha = 0.3;
       ctx.lineWidth = stroke.width;
       ctx.beginPath();
-      stroke.points.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
+      traceCurve(ctx, stroke.points);
       if (stroke.points.length === 1) ctx.lineTo(stroke.points[0].x + 0.01, stroke.points[0].y);
       ctx.stroke();
     } else {
-      for (let i = 0; i < stroke.points.length; i++) {
-        const p = stroke.points[i],
-          prev = stroke.points[Math.max(0, i - 1)];
-        ctx.lineWidth = stroke.width * (0.35 + (0.9 * (p.p + prev.p)) / 2);
+      const outline = penOutline(stroke, draft);
+      if (outline.length) {
+        const first = outline[0],
+          last = outline.at(-1)!;
         ctx.beginPath();
-        ctx.moveTo(prev.x, prev.y);
-        ctx.lineTo(p.x, p.y);
-        ctx.stroke();
-        if (i === 0) {
-          ctx.beginPath();
-          ctx.arc(p.x, p.y, ctx.lineWidth / 2, 0, Math.PI * 2);
-          ctx.fill();
+        ctx.moveTo((last[0] + first[0]) / 2, (last[1] + first[1]) / 2);
+        for (let i = 0; i < outline.length; i++) {
+          const p = outline[i],
+            next = outline[(i + 1) % outline.length];
+          ctx.quadraticCurveTo(p[0], p[1], (p[0] + next[0]) / 2, (p[1] + next[1]) / 2);
         }
+        ctx.closePath();
+        ctx.fill();
       }
     }
     ctx.restore();

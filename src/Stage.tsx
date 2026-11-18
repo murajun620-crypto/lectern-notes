@@ -1,16 +1,22 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 import { Trash2 } from 'lucide-react';
-import { clamp, drawStrokes, pointInPolygon, strokeHit, uid } from './model';
+import { clamp, drawStrokes, drawLaser, pointInPolygon, strokeHit, uid } from './model';
 import type { Page, Point, Stroke, Tool, Video } from './model';
 import { renderPage } from './pdf';
 import VideoBox from './VideoBox';
+import { effectiveTool, PalmGuard } from './input';
+import type { PencilTool } from './input';
 type Props = {
   page: Page;
   tool: Tool;
   color: string;
   width: number;
   fingerInk: boolean;
+  pencilTool: PencilTool;
+  palmRejection: boolean;
+  twoFingerTap: boolean;
+  onToggleEraser: () => void;
   trail: boolean;
   lecture: boolean;
   fitWidth: boolean;
@@ -26,6 +32,10 @@ export default function Stage({
   color,
   width,
   fingerInk,
+  pencilTool,
+  palmRejection,
+  twoFingerTap,
+  onToggleEraser,
   trail,
   lecture,
   fitWidth,
@@ -52,6 +62,8 @@ export default function Stage({
   const gesture = useRef<{
     kind: 'draw' | 'erase' | 'lasso' | 'move' | 'pan' | 'laser';
     id: number;
+    pointerType: string;
+    started: number;
     start: Point;
     client: { x: number; y: number };
     original: Stroke[];
@@ -64,9 +76,17 @@ export default function Stage({
   const touches = useRef(new Map<number, { x: number; y: number }>()),
     pinch = useRef<{ distance: number; zoom: number; anchor: { x: number; y: number } } | null>(
       null,
-    ),
-    penAt = useRef(0),
-    penActive = useRef(false);
+    );
+  const palm = useRef(new PalmGuard());
+  const swipe = useRef<{ id: number; x: number; y: number; lastX: number; lastY: number } | null>(
+    null,
+  );
+  const tap = useRef<{
+    ids: Set<number>;
+    starts: Map<number, { x: number; y: number }>;
+    at: number;
+    cancelled: boolean;
+  } | null>(null);
   const lasers = useRef<{ x: number; y: number; t: number }[]>([]);
   const inkCache = useRef<{
     strokes: Stroke[];
@@ -111,8 +131,24 @@ export default function Stage({
     touches.current.clear();
     pinch.current = null;
     lasers.current = [];
-    penActive.current = false;
+    tap.current = null;
+    swipe.current = null;
   }, [page.id]);
+  useEffect(() => {
+    const reset = () => {
+      palm.current.reset(performance.now());
+      gesture.current = null;
+      touches.current.clear();
+      pinch.current = null;
+      tap.current = null;
+      swipe.current = null;
+      setDraft(null);
+      setWorking(null);
+      setLasso([]);
+    };
+    window.addEventListener('blur', reset);
+    return () => window.removeEventListener('blur', reset);
+  }, []);
   useEffect(() => {
     setPan((p) => limit(p));
   }, [limit]);
@@ -171,7 +207,7 @@ export default function Stage({
     }
     ctx.drawImage(inkCache.current.canvas, 0, 0);
     ctx.scale(s, s);
-    if (draft) drawStrokes(ctx, [draft]);
+    if (draft) drawStrokes(ctx, [draft], true);
     ctx.strokeStyle = '#367f77';
     ctx.lineWidth = 1.5 / scale;
     ctx.setLineDash([5 / scale, 4 / scale]);
@@ -199,42 +235,25 @@ export default function Stage({
   }, [page, scale, working, draft, lasso, selection]);
   useEffect(() => {
     let frame: number;
+    let wasVisible = false;
     const canvas = laserCanvas.current!;
     const output = Math.min(scale * devicePixelRatio, 4096 / Math.max(page.width, page.height));
     canvas.width = Math.round(page.width * output);
     canvas.height = Math.round(page.height * output);
     const ctx = canvas.getContext('2d')!;
     const draw = () => {
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.scale(output, output);
       const now = performance.now();
       lasers.current = lasers.current.filter((p) => now - p.t < (trail ? 700 : 130));
       const points = lasers.current;
-      for (let i = 1; i < points.length; i++) {
-        ctx.globalAlpha = (1 - (now - points[i].t) / 700) * 0.6;
-        ctx.strokeStyle = '#fb403b';
-        ctx.lineWidth = 4 / scale;
-        ctx.lineCap = 'round';
-        ctx.beginPath();
-        ctx.moveTo(points[i - 1].x, points[i - 1].y);
-        ctx.lineTo(points[i].x, points[i].y);
-        ctx.stroke();
+      if (!points.length && !wasVisible) {
+        frame = requestAnimationFrame(draw);
+        return;
       }
-      const p = points.at(-1);
-      if (p) {
-        ctx.globalAlpha = 1;
-        ctx.shadowColor = '#fa3939';
-        ctx.shadowBlur = 13;
-        ctx.fillStyle = '#ff3c3c';
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, 6 / scale, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.shadowBlur = 0;
-        ctx.strokeStyle = 'white';
-        ctx.lineWidth = 1.5 / scale;
-        ctx.stroke();
-      }
+      wasVisible = points.length > 0;
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.scale(output, output);
+      drawLaser(ctx, points, scale, now, trail);
       frame = requestAnimationFrame(draw);
     };
     frame = requestAnimationFrame(draw);
@@ -248,14 +267,30 @@ export default function Stage({
       p: e.pressure && e.pressure > 0 ? e.pressure : 0.5,
     };
   };
+  const turnBySwipe = (dx: number, dy: number) => {
+    if (
+      Math.abs(dx) < Math.min(70, Math.max(40, size.w * 0.08)) ||
+      Math.abs(dx) <= Math.abs(dy) * 1.4
+    )
+      return false;
+    gesture.current = null;
+    swipe.current = null;
+    tap.current = null;
+    onNavigate(dx < 0 ? 1 : -1);
+    return true;
+  };
   const down = (e: ReactPointerEvent) => {
     if (e.button !== 0 && e.pointerType === 'mouse') return;
-    if (e.pointerType === 'touch' && (penActive.current || performance.now() - penAt.current < 250))
-      return;
     e.currentTarget.setPointerCapture(e.pointerId);
     if (e.pointerType === 'touch') {
       touches.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
       if (touches.current.size === 2) {
+        tap.current = {
+          ids: new Set(touches.current.keys()),
+          starts: new Map(touches.current),
+          at: performance.now(),
+          cancelled: !twoFingerTap || performance.now() - (gesture.current?.started || 0) > 220,
+        };
         gesture.current = null;
         setDraft(null);
         setWorking(null);
@@ -273,6 +308,10 @@ export default function Stage({
         };
         return;
       }
+      if (touches.current.size > 2) {
+        if (tap.current) tap.current.cancelled = true;
+        return;
+      }
     }
     if (e.pointerType === 'pen') {
       gesture.current = null;
@@ -285,27 +324,24 @@ export default function Stage({
     if (gesture.current) return;
     const p = point(e),
       isInk = e.pointerType === 'pen' || e.pointerType === 'mouse' || fingerInk || tool === 'laser';
-    if (e.pointerType === 'pen') {
-      penAt.current = performance.now();
-      penActive.current = true;
-      touches.current.clear();
-      pinch.current = null;
-    }
+    const selectedTool = effectiveTool(tool, pencilTool, e.pointerType, fingerInk);
     let kind: 'draw' | 'erase' | 'lasso' | 'move' | 'pan' | 'laser' = 'pan';
     if (isInk) {
-      if (tool === 'pen' || tool === 'highlighter') kind = 'draw';
-      else if (tool === 'select')
+      if (selectedTool === 'pen' || selectedTool === 'highlighter') kind = 'draw';
+      else if (selectedTool === 'select')
         kind =
           selection.length &&
           page.strokes.some((s) => selection.includes(s.id) && strokeHit(s, p, 18 / scale))
             ? 'move'
             : 'lasso';
-      else if (tool === 'eraser') kind = 'erase';
-      else if (tool === 'laser') kind = 'laser';
+      else if (selectedTool === 'eraser') kind = 'erase';
+      else if (selectedTool === 'laser') kind = 'laser';
     }
     gesture.current = {
       kind,
       id: e.pointerId,
+      pointerType: e.pointerType,
+      started: performance.now(),
       start: p,
       client: { x: e.clientX, y: e.clientY },
       pan,
@@ -316,9 +352,9 @@ export default function Stage({
     if (kind === 'draw') {
       const s: Stroke = {
         id: uid(),
-        tool: tool as 'pen' | 'highlighter',
+        tool: selectedTool as 'pen' | 'highlighter',
         color,
-        width: tool === 'highlighter' ? width * 5 : width,
+        width: selectedTool === 'highlighter' ? width * 5 : width,
         points: [p],
       };
       gesture.current.stroke = s;
@@ -335,6 +371,9 @@ export default function Stage({
     if (kind === 'laser') lasers.current.push({ ...p, t: performance.now() });
   };
   const move = (e: ReactPointerEvent) => {
+    const initial = tap.current?.starts.get(e.pointerId);
+    if (initial && Math.hypot(e.clientX - initial.x, e.clientY - initial.y) > 12)
+      tap.current!.cancelled = true;
     if (touches.current.has(e.pointerId))
       touches.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (pinch.current && touches.current.size >= 2) {
@@ -400,9 +439,14 @@ export default function Stage({
     }
   };
   const up = (e: ReactPointerEvent, cancel = false) => {
-    if (e.pointerType === 'pen') {
-      penActive.current = false;
-      penAt.current = performance.now();
+    if (tap.current?.ids.has(e.pointerId)) {
+      if (cancel) tap.current.cancelled = true;
+      tap.current.ids.delete(e.pointerId);
+      if (!tap.current.ids.size) {
+        const accepted = !tap.current.cancelled && performance.now() - tap.current.at < 280;
+        tap.current = null;
+        if (accepted) onToggleEraser();
+      }
     }
     touches.current.delete(e.pointerId);
     if (pinch.current) {
@@ -440,10 +484,10 @@ export default function Stage({
             .filter((s) => s.points.some((p) => pointInPolygon(p, g.points)))
             .map((s) => s.id),
         );
-      if (g.kind === 'pan' && zoom <= 1.03) {
+      if (g.kind === 'pan' && g.pointerType === 'touch') {
         const dx = e.clientX - g.client.x,
           dy = e.clientY - g.client.y;
-        if (Math.abs(dx) > 90 && Math.abs(dx) > Math.abs(dy) * 1.6) onNavigate(dx < 0 ? 1 : -1);
+        turnBySwipe(dx, dy);
       }
     }
     setDraft(null);
@@ -457,10 +501,129 @@ export default function Stage({
       className={`stage tool-${tool}`}
       ref={viewport}
       data-testid="stage"
+      onPointerDownCapture={(e) => {
+        if (e.pointerType === 'pen') {
+          swipe.current = null;
+          const g = gesture.current;
+          if (g?.pointerType === 'touch') {
+            if (g.kind === 'pan') setPan(g.pan);
+            gesture.current = null;
+            setDraft(null);
+            setWorking(null);
+            setLasso([]);
+          }
+          palm.current.penDown(e.pointerId, performance.now());
+          touches.current.clear();
+          pinch.current = null;
+          tap.current = null;
+        } else if (
+          e.pointerType === 'touch' &&
+          !palm.current.touchDown(e.pointerId, e.width, e.height, performance.now(), palmRejection)
+        ) {
+          e.preventDefault();
+          e.stopPropagation();
+        }
+      }}
+      onPointerMoveCapture={(e) => {
+        if (e.pointerType === 'touch' && !palm.current.allowsTouch(e.pointerId)) {
+          e.preventDefault();
+          e.stopPropagation();
+        }
+      }}
+      onPointerUpCapture={(e) => {
+        if (e.pointerType === 'pen') palm.current.penUp(e.pointerId, performance.now());
+        if (e.pointerType === 'touch') {
+          const accepted = palm.current.allowsTouch(e.pointerId);
+          palm.current.touchUp(e.pointerId, performance.now());
+          if (!accepted) {
+            e.preventDefault();
+            e.stopPropagation();
+          }
+        }
+      }}
+      onPointerCancelCapture={(e) => {
+        if (e.pointerType === 'pen') palm.current.penUp(e.pointerId, performance.now());
+        if (e.pointerType === 'touch') palm.current.touchUp(e.pointerId);
+      }}
+      onClickCapture={(e) => {
+        const pe = e.nativeEvent as PointerEvent;
+        if (
+          palm.current.blocksClick(
+            pe.pointerType,
+            pe.width || 0,
+            pe.height || 0,
+            performance.now(),
+            palmRejection,
+          )
+        ) {
+          e.preventDefault();
+          e.stopPropagation();
+        }
+      }}
       onPointerDown={down}
+      onTouchStart={(e) => {
+        if (
+          e.touches.length !== 1 ||
+          fingerInk ||
+          tool === 'laser' ||
+          (e.target as Element).closest('.video-box,.selection-delete') ||
+          palm.current.blocksNavigation(performance.now(), palmRejection)
+        ) {
+          swipe.current = null;
+          return;
+        }
+        const t = e.touches[0] as (typeof e.touches)[0] & {
+          radiusX?: number;
+          radiusY?: number;
+          touchType?: string;
+        };
+        if (
+          t.touchType === 'stylus' ||
+          (Math.max(t.radiusX || 0, t.radiusY || 0) * 2 >= 40 && palmRejection)
+        ) {
+          swipe.current = null;
+          return;
+        }
+        swipe.current = {
+          id: t.identifier,
+          x: t.clientX,
+          y: t.clientY,
+          lastX: t.clientX,
+          lastY: t.clientY,
+        };
+      }}
+      onTouchMove={(e) => {
+        const g = swipe.current;
+        if (!g) return;
+        if (
+          e.touches.length !== 1 ||
+          palm.current.blocksNavigation(performance.now(), palmRejection)
+        ) {
+          swipe.current = null;
+          return;
+        }
+        const t = Array.from(e.touches).find((t) => t.identifier === g.id);
+        if (t) {
+          g.lastX = t.clientX;
+          g.lastY = t.clientY;
+        }
+      }}
+      onTouchEnd={(e) => {
+        const g = swipe.current;
+        if (!g) return;
+        const t = Array.from(e.changedTouches).find((t) => t.identifier === g.id);
+        if (!t) return;
+        swipe.current = null;
+        if (!palm.current.blocksNavigation(performance.now(), palmRejection))
+          turnBySwipe((t.clientX || g.lastX) - g.x, (t.clientY || g.lastY) - g.y);
+      }}
+      onTouchCancel={() => {
+        swipe.current = null;
+      }}
       onPointerMove={move}
       onPointerUp={(e) => up(e)}
       onPointerCancel={(e) => up(e, true)}
+      onLostPointerCapture={(e) => up(e, true)}
       onContextMenu={(e) => e.preventDefault()}
       onWheel={(e) => {
         if (e.ctrlKey || e.metaKey) setZoom(clamp(zoom - e.deltaY * 0.005, 1, 5));

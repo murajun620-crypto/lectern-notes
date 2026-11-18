@@ -50,6 +50,10 @@ import {
 } from './storage';
 import { demoFile, exportPdf, importPdf, releasePdfs, renderPage } from './pdf';
 import Stage from './Stage';
+import { loadInputPreferences } from './input';
+import type { PencilTool } from './input';
+import { initialVideoRect } from './video-layout';
+import UpdateButton from './UpdateButton';
 function IconButton({
   label,
   children,
@@ -163,12 +167,47 @@ export default function App() {
   const [tool, setTool] = useState<Tool>('pen'),
     [color, setColor] = useState(colors[0]),
     [width, setWidth] = useState(2.5),
-    [fingerInk, setFingerInk] = useState(false),
+    [preferences, setPreferences] = useState(loadInputPreferences),
     [trail, setTrail] = useState(true),
     [zoom, setZoom] = useState(1),
     [fitWidth, setFitWidth] = useState(false),
     [sidebar, setSidebar] = useState(true),
     [lecture, setLecture] = useState(false);
+  const fingerInk = preferences.fingerInk;
+  const pencilTool = useRef<PencilTool>('pen'),
+    lastWritingTool = useRef<'pen' | 'highlighter'>('pen');
+  if (tool !== 'hand') pencilTool.current = tool;
+  if (tool === 'pen' || tool === 'highlighter') lastWritingTool.current = tool;
+  const toggleEraser = useCallback(
+    () =>
+      setTool((current) =>
+        (current === 'hand' ? pencilTool.current : current) === 'eraser'
+          ? lastWritingTool.current
+          : 'eraser',
+      ),
+    [],
+  );
+  useEffect(() => {
+    try {
+      localStorage.setItem('lectern.input', JSON.stringify(preferences));
+    } catch {
+      /* Preferences are optional; project data still uses IndexedDB. */
+    }
+  }, [preferences]);
+  useEffect(() => {
+    const resize = () =>
+      document.documentElement.style.setProperty(
+        '--app-height',
+        `${window.visualViewport?.height || window.innerHeight}px`,
+      );
+    resize();
+    window.addEventListener('resize', resize);
+    window.visualViewport?.addEventListener('resize', resize);
+    return () => {
+      window.removeEventListener('resize', resize);
+      window.visualViewport?.removeEventListener('resize', resize);
+    };
+  }, []);
   const [dialog, setDialog] = useState<Dialog>(null),
     [busy, setBusy] = useState(''),
     [error, setError] = useState(''),
@@ -384,6 +423,12 @@ export default function App() {
       await persist(project);
       download(await exportBackup(project), `${project.name}.lecture.zip`);
     });
+  const beforeReload = async () => {
+    if (current.current) {
+      clearTimeout(saveTimer.current);
+      await persist(current.current);
+    }
+  };
   const exportDocument = () =>
     project &&
     void run('PDFを書き出し中…', async () => {
@@ -419,8 +464,6 @@ export default function App() {
       return;
     }
     if (!page) return;
-    const w = Math.min(400, page.width * 0.6),
-      h = Math.min(240, page.height * 0.55);
     changePage({
       ...page,
       videos: [
@@ -428,10 +471,7 @@ export default function App() {
         {
           id: uid(),
           videoId: id,
-          x: (page.width - w) / 2,
-          y: (page.height - h) / 2,
-          width: w,
-          height: h,
+          ...initialVideoRect(page),
         },
       ],
     });
@@ -517,9 +557,12 @@ export default function App() {
               <span>
                 マイライブラリ <span className="subtle">/ LECTURES</span>
               </span>
-              <span className="local-label">
-                <span /> ローカルワークスペース
-              </span>
+              <div className="library-header-end">
+                <UpdateButton beforeReload={beforeReload} />
+                <span className="local-label">
+                  <span /> ローカルワークスペース
+                </span>
+              </div>
             </header>
             <section className="library-intro">
               <div>
@@ -697,6 +740,7 @@ export default function App() {
               {saved ? '保存済み' : '保存中'}
             </span>
             <div className="header-end">
+              <UpdateButton beforeReload={beforeReload} />
               <details className="export-menu">
                 <summary className="secondary">
                   <Download size={17} />
@@ -778,18 +822,17 @@ export default function App() {
                 />
                 <span style={{ background: color }} />
               </label>
-              {!lecture &&
-                colors
-                  .slice(1, 4)
-                  .map((c) => (
-                    <button
-                      key={c}
-                      className={`color-dot ${color === c ? 'chosen' : ''}`}
-                      style={{ '--swatch': c } as React.CSSProperties}
-                      aria-label={`色 ${c}`}
-                      onClick={() => setColor(c)}
-                    />
-                  ))}
+              {preferences.presets.map((c, i) => (
+                <button
+                  key={i}
+                  className={`color-preset ${color === c ? 'chosen' : ''}`}
+                  style={{ '--swatch': c } as React.CSSProperties}
+                  aria-label={`カラープリセット${i + 1}`}
+                  aria-pressed={color === c}
+                  title={`カラープリセット${i + 1}（入力設定で変更）`}
+                  onClick={() => setColor(c)}
+                />
+              ))}
               <label className="width-select">
                 <span
                   className="width-preview"
@@ -838,11 +881,59 @@ export default function App() {
                   <input
                     type="checkbox"
                     checked={fingerInk}
-                    onChange={(e) => setFingerInk(e.target.checked)}
+                    onChange={(e) => setPreferences((p) => ({ ...p, fingerInk: e.target.checked }))}
                   />{' '}
                   指でも筆記する
                 </label>
-                <small>OFFでは、指は移動・ページ送り専用です。</small>
+                <small>
+                  通常はOFF。指は移動、Pencilは直前の筆記ツールを使用します。「移動」への切替は不要です。
+                </small>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={preferences.palmRejection}
+                    onChange={(e) =>
+                      setPreferences((p) => ({ ...p, palmRejection: e.target.checked }))
+                    }
+                  />{' '}
+                  手のひらの誤操作を抑える
+                </label>
+                <small>Pencil使用中・直後の指入力と、大きな接触を無視します。</small>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={preferences.twoFingerTap}
+                    onChange={(e) =>
+                      setPreferences((p) => ({ ...p, twoFingerTap: e.target.checked }))
+                    }
+                  />{' '}
+                  2本指タップでペン／消しゴム
+                </label>
+                <small>
+                  Pencil本体のダブルタップはSafariの公開APIでは取得できません。画面への2本指タップを使えます。
+                </small>
+                <div className="preset-settings">
+                  <span>カラープリセット</span>
+                  <div>
+                    {preferences.presets.map((c, i) => (
+                      <label key={i}>
+                        <span>{i + 1}</span>
+                        <input
+                          type="color"
+                          aria-label={`プリセット${i + 1}の色を変更`}
+                          value={c}
+                          onChange={(e) => {
+                            const next = e.target.value;
+                            setPreferences((p) => ({
+                              ...p,
+                              presets: p.presets.map((color, j) => (i === j ? next : color)),
+                            }));
+                          }}
+                        />
+                      </label>
+                    ))}
+                  </div>
+                </div>
                 <label>
                   <input
                     type="checkbox"
@@ -853,24 +944,22 @@ export default function App() {
                 </label>
                 <button
                   onClick={() => {
-                    if (!document.documentElement.requestFullscreen) {
-                      setError(
-                        'この端末では全画面APIを利用できません。講義モードはそのまま使えます。',
-                      );
+                    if (
+                      !document.fullscreenEnabled ||
+                      !document.documentElement.requestFullscreen
+                    ) {
+                      toggleLecture();
                       return;
                     }
                     if (!document.fullscreenElement)
                       void document.documentElement
                         .requestFullscreen?.()
-                        .catch(() =>
-                          setError(
-                            'この端末では全画面APIを利用できません。講義モードはそのまま使えます。',
-                          ),
-                        );
+                        .catch(() => setLecture(true));
                     else void document.exitFullscreen();
                   }}
                 >
-                  <Maximize size={16} /> 全画面表示を切替
+                  <Maximize size={16} />{' '}
+                  {document.fullscreenEnabled ? '全画面表示を切替' : '画面いっぱいの講義表示'}
                 </button>
               </div>
             </details>
@@ -938,6 +1027,10 @@ export default function App() {
                   color={color}
                   width={width}
                   fingerInk={fingerInk}
+                  pencilTool={pencilTool.current}
+                  palmRejection={preferences.palmRejection}
+                  twoFingerTap={preferences.twoFingerTap}
+                  onToggleEraser={toggleEraser}
                   trail={trail}
                   lecture={lecture}
                   fitWidth={fitWidth}

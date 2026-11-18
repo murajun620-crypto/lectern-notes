@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
-import { Play, X, GripHorizontal, ExternalLink, Trash2, Maximize2 } from 'lucide-react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { Play, X, GripHorizontal, ExternalLink, Trash2, Maximize2, Minus } from 'lucide-react';
 import { clamp } from './model';
 import type { Video, Page } from './model';
+import { playbackRect } from './video-layout';
 type Player = {
   destroy(): void;
   playVideo(): void;
@@ -79,6 +80,20 @@ export default function VideoBox({
   const [preview, setPreview] = useState<Video | null>(null),
     previewRef = useRef<Video | null>(null);
   const shown = preview || v;
+  const box = useRef<HTMLDivElement>(null);
+  const [paperSize, setPaperSize] = useState({ width: 0, height: 0 });
+  useLayoutEffect(() => {
+    const parent = box.current!.parentElement!;
+    const resize = () => {
+      const r = parent.getBoundingClientRect();
+      setPaperSize({ width: r.width, height: r.height });
+    };
+    resize();
+    const observer = new ResizeObserver(resize);
+    observer.observe(parent);
+    return () => observer.disconnect();
+  }, []);
+  const compact = shown.width * (paperSize.width / page.width) < 180;
   const showPreview = (next: Video | null) => {
     previewRef.current = next;
     setPreview(next);
@@ -160,16 +175,25 @@ export default function VideoBox({
   }, [playing, v.videoId]);
   return (
     <div
-      className={`video-box ${playing ? 'playing' : ''} ${editing ? 'editable' : ''}`}
+      ref={box}
+      className={`video-box ${playing ? 'playing' : ''} ${editing ? 'editable' : ''} ${compact ? 'compact' : ''}`}
       data-testid="video-box"
       data-player-state={playbackState}
-      style={{
-        left: `${(shown.x / page.width) * 100}%`,
-        top: `${(shown.y / page.height) * 100}%`,
-        width: `${(shown.width / page.width) * 100}%`,
-        height: `${(shown.height / page.height) * 100}%`,
-      }}
+      style={
+        playing && paperSize.width
+          ? playbackRect(v, paperSize, page)
+          : {
+              left: `${(shown.x / page.width) * 100}%`,
+              top: `${(shown.y / page.height) * 100}%`,
+              width: `${(shown.width / page.width) * 100}%`,
+              height: `${(shown.height / page.height) * 100}%`,
+            }
+      }
       onPointerDown={(e) => e.stopPropagation()}
+      onLostPointerCapture={() => {
+        showPreview(null);
+        drag.current = null;
+      }}
     >
       {playing ? (
         <>
@@ -259,6 +283,17 @@ export default function VideoBox({
             <GripHorizontal size={16} />
             <span>移動</span>
             <button
+              title="サムネイルを小さく"
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={() => {
+                const width = Math.min(v.width, Math.max(64, v.width * 0.7)),
+                  height = Math.min(v.height, Math.max(36, v.height * 0.7));
+                onChange({ ...v, width, height });
+              }}
+            >
+              <Minus size={15} />
+            </button>
+            <button
               title="動画を削除"
               onPointerDown={(e) => e.stopPropagation()}
               onClick={onDelete}
@@ -287,12 +322,12 @@ export default function VideoBox({
                 ...d.video,
                 width: clamp(
                   d.video.width + ((e.clientX - d.x) * page.width) / d.rect.width,
-                  Math.min(220, page.width - d.video.x),
+                  Math.min(64, page.width - d.video.x),
                   page.width - d.video.x,
                 ),
                 height: clamp(
                   d.video.height + ((e.clientY - d.y) * page.height) / d.rect.height,
-                  Math.min(160, page.height - d.video.y),
+                  Math.min(36, page.height - d.video.y),
                   page.height - d.video.y,
                 ),
               });
