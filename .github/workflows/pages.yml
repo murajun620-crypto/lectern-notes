@@ -24,6 +24,18 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm test
+      - name: Use Ubuntu archives over HTTPS
+        run: |
+          sudo python3 - <<'PY'
+          from pathlib import Path
+          import re
+          for path in [Path('/etc/apt/sources.list'), Path('/etc/apt/sources.list.d/ubuntu.sources')]:
+              if path.exists():
+                  source = path.read_text()
+                  source = re.sub(r'https?://(?:[^/\s]+\.)?archive\.ubuntu\.com/ubuntu', 'https://archive.ubuntu.com/ubuntu', source)
+                  source = source.replace('http://security.ubuntu.com/ubuntu', 'https://security.ubuntu.com/ubuntu')
+                  path.write_text(source)
+          PY
       - run: pnpm exec playwright install --with-deps chromium webkit
       - run: pnpm test:e2e
       - run: pnpm build
