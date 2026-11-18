@@ -898,7 +898,9 @@ export default function App() {
                   />{' '}
                   手のひらの誤操作を抑える
                 </label>
-                <small>Pencil使用中・直後の指入力と、大きな接触を無視します。</small>
+                <small>
+                  Pencil使用中の接触、置いたままの手、大きな接触を無視します。離した後に新しく置いた指はすぐ使えます。
+                </small>
                 <label>
                   <input
                     type="checkbox"

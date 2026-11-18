@@ -128,6 +128,13 @@ test('Pencil writes in hand mode, a resting palm stays blocked, and two-finger t
       page.getByRole('button', { name: i ? 'ペン' : '消しゴム', exact: true }),
     ).toHaveAttribute('aria-pressed', 'true');
   }
+  // A newly placed finger can swipe immediately after lifting Pencil; only held contacts stay blocked.
+  await pointer(page, 'pointerdown', 7, 'pen', a, b);
+  await pointer(page, 'pointerup', 7, 'pen', a, b);
+  await pointer(page, 'pointerdown', 8, 'touch', a + 40, b);
+  await pointer(page, 'pointermove', 8, 'touch', a - 80, b);
+  await pointer(page, 'pointerup', 8, 'touch', a - 80, b);
+  await expect(page.getByLabel('ページ番号')).toHaveValue('2');
 });
 
 test('Safari touch fallback flips pages while zoomed and never double-turns a Pointer gesture', async ({

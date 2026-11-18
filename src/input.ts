@@ -55,10 +55,20 @@ export class PalmGuard {
   penUp(id: number, now: number) {
     if (this.pens.delete(id)) this.lastPen = now;
   }
-  touchDown(id: number, width: number, height: number, now: number, enabled: boolean) {
+  touchDown(
+    id: number,
+    width: number,
+    height: number,
+    now: number,
+    enabled: boolean,
+    rejectRecent = true,
+  ) {
     if (
       this.blocked.has(id) ||
-      (enabled && (this.pens.size > 0 || now - this.lastPen < 350 || Math.max(width, height) >= 40))
+      (enabled &&
+        (this.pens.size > 0 ||
+          (rejectRecent && now - this.lastPen < 350) ||
+          Math.max(width, height) >= 40))
     ) {
       this.blocked.add(id);
       return false;
@@ -84,8 +94,8 @@ export class PalmGuard {
         Math.max(width, height) >= 40)
     );
   }
-  blocksNavigation(now: number, enabled: boolean) {
-    return enabled && (this.pens.size > 0 || this.blocked.size > 0 || now - this.lastPen < 350);
+  blocksNavigation(_now: number, enabled: boolean) {
+    return enabled && (this.pens.size > 0 || this.blocked.size > 0);
   }
   reset(now: number) {
     this.pens.clear();

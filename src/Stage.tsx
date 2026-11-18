@@ -518,7 +518,14 @@ export default function Stage({
           tap.current = null;
         } else if (
           e.pointerType === 'touch' &&
-          !palm.current.touchDown(e.pointerId, e.width, e.height, performance.now(), palmRejection)
+          !palm.current.touchDown(
+            e.pointerId,
+            e.width,
+            e.height,
+            performance.now(),
+            palmRejection,
+            fingerInk,
+          )
         ) {
           e.preventDefault();
           e.stopPropagation();
