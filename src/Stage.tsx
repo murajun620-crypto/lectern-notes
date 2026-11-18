@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 import { Trash2 } from 'lucide-react';
 import { clamp, drawStrokes, drawLaser, pointInPolygon, strokeHit, uid } from './model';
@@ -7,11 +7,13 @@ import { renderPage } from './pdf';
 import VideoBox from './VideoBox';
 import { effectiveTool, PalmGuard } from './input';
 import type { PencilTool } from './input';
+import { usePageViewport } from './usePageViewport';
 type Props = {
   page: Page;
   tool: Tool;
   color: string;
   width: number;
+  laserWidth: number;
   fingerInk: boolean;
   pencilTool: PencilTool;
   palmRejection: boolean;
@@ -31,6 +33,7 @@ export default function Stage({
   tool,
   color,
   width,
+  laserWidth,
   fingerInk,
   pencilTool,
   palmRejection,
@@ -51,7 +54,6 @@ export default function Stage({
     inkCanvas = useRef<HTMLCanvasElement>(null),
     laserCanvas = useRef<HTMLCanvasElement>(null);
   const [size, setSize] = useState({ w: 1000, h: 700 }),
-    [pan, setPan] = useState({ x: 0, y: 0 }),
     [loading, setLoading] = useState(true);
   const [selection, setSelection] = useState<string[]>([]),
     [lasso, setLasso] = useState<Point[]>([]),
@@ -108,22 +110,27 @@ export default function Stage({
       ? (size.w - 56) / page.width
       : Math.min((size.w - 56) / page.width, (size.h - 48) / page.height),
   );
-  const scale = fit * zoom;
-  const limit = useCallback(
-    (next: { x: number; y: number }, z = zoom) => ({
-      x: clamp(
-        next.x,
-        -Math.max(0, (page.width * fit * z - size.w + 40) / 2),
-        Math.max(0, (page.width * fit * z - size.w + 40) / 2),
-      ),
-      y: clamp(
-        next.y,
-        -Math.max(0, (page.height * fit * z - size.h + 40) / 2),
-        Math.max(0, (page.height * fit * z - size.h + 40) / 2),
-      ),
-    }),
-    [fit, page.width, page.height, size, zoom],
-  );
+  const {
+    view,
+    pan,
+    interacting,
+    rasterScale,
+    limit,
+    begin: beginView,
+    move: moveView,
+    commit: commitView,
+    commitSoon,
+  } = usePageViewport({
+    paper,
+    pageId: page.id,
+    width: page.width,
+    height: page.height,
+    size,
+    fit,
+    zoom,
+    setZoom,
+  });
+  const screenScale = () => fit * view.current.zoom;
   useLayoutEffect(() => {
     const el = viewport.current!;
     const ro = new ResizeObserver(() => setSize({ w: el.clientWidth, h: el.clientHeight }));
@@ -131,7 +138,6 @@ export default function Stage({
     return () => ro.disconnect();
   }, []);
   useEffect(() => {
-    setPan({ x: 0, y: 0 });
     setSelection([]);
     setWorking(null);
     setDraft(null);
@@ -145,6 +151,7 @@ export default function Stage({
   }, [page.id]);
   useEffect(() => {
     const reset = () => {
+      commitView();
       palm.current.reset(performance.now());
       gesture.current = null;
       touches.current.clear();
@@ -158,10 +165,7 @@ export default function Stage({
     };
     window.addEventListener('blur', reset);
     return () => window.removeEventListener('blur', reset);
-  }, []);
-  useEffect(() => {
-    setPan((p) => limit(p));
-  }, [limit]);
+  }, [commitView]);
   useEffect(() => {
     setSelection([]);
     setLasso([]);
@@ -169,17 +173,18 @@ export default function Stage({
   useEffect(() => {
     let cancelled = false;
     const abort = new AbortController();
-    setLoading(true);
+    if (pdfCanvas.current?.dataset.page !== page.id) setLoading(true);
     const target = pdfCanvas.current!;
     // Render offscreen to prevent overlapping PDF.js jobs during zoom/page changes.
     const temp = document.createElement('canvas');
-    const output = Math.min(scale * devicePixelRatio, 4096 / Math.max(page.width, page.height));
+    const output = rasterScale;
     void renderPage(page, temp, output, abort.signal)
       .then(() => {
         if (cancelled) return;
         target.width = temp.width;
         target.height = temp.height;
         target.getContext('2d')!.drawImage(temp, 0, 0);
+        target.dataset.page = page.id;
         setLoading(false);
       })
       .catch((e) => {
@@ -192,14 +197,17 @@ export default function Stage({
       cancelled = true;
       abort.abort();
     };
-  }, [page.id, page.assetId, page.sourcePage, page.width, page.height, scale, onError]);
+  }, [page.id, page.assetId, page.sourcePage, page.width, page.height, rasterScale, onError]);
   useLayoutEffect(() => {
     const canvas = inkCanvas.current!,
-      dpr = Math.min(devicePixelRatio, 2),
-      s = Math.min(scale * dpr, 4096 / Math.max(page.width, page.height));
-    canvas.width = Math.round(page.width * s);
-    canvas.height = Math.round(page.height * s);
+      s = rasterScale;
+    const w = Math.round(page.width * s),
+      h = Math.round(page.height * s);
+    if (canvas.width !== w) canvas.width = w;
+    if (canvas.height !== h) canvas.height = h;
     const ctx = canvas.getContext('2d')!;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
     const strokes = working || page.strokes;
     if (
       !inkCache.current ||
@@ -219,8 +227,8 @@ export default function Stage({
     ctx.scale(s, s);
     if (draft) drawStrokes(ctx, [draft], true);
     ctx.strokeStyle = '#367f77';
-    ctx.lineWidth = 1.5 / scale;
-    ctx.setLineDash([5 / scale, 4 / scale]);
+    ctx.lineWidth = 1.5 / screenScale();
+    ctx.setLineDash([5 / screenScale(), 4 / screenScale()]);
     if (lasso.length) {
       ctx.beginPath();
       lasso.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
@@ -242,14 +250,14 @@ export default function Stage({
         }
       ctx.strokeRect(left - 6, top - 6, right - left + 12, bottom - top + 12);
     }
-  }, [page, scale, working, draft, lasso, selection]);
+  }, [page, rasterScale, working, draft, lasso, selection, zoom, fit]);
   useEffect(() => {
     let frame: number;
     let wasVisible = false;
     const canvas = laserCanvas.current!;
-    const output = Math.min(scale * devicePixelRatio, 4096 / Math.max(page.width, page.height));
-    canvas.width = Math.round(page.width * output);
-    canvas.height = Math.round(page.height * output);
+    const output = Math.min(devicePixelRatio || 1, 2);
+    canvas.width = Math.round(size.w * output);
+    canvas.height = Math.round(size.h * output);
     const ctx = canvas.getContext('2d')!;
     const draw = () => {
       const now = performance.now();
@@ -263,12 +271,19 @@ export default function Stage({
       ctx.setTransform(1, 0, 0, 1, 0, 0);
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       ctx.scale(output, output);
-      drawLaser(ctx, points, scale, now, trail);
+      const current = view.current,
+        scale = fit * current.zoom;
+      ctx.translate(
+        (size.w - page.width * scale) / 2 + current.pan.x,
+        (size.h - page.height * scale) / 2 + current.pan.y,
+      );
+      ctx.scale(scale, scale);
+      drawLaser(ctx, points, scale, now, trail, laserWidth);
       frame = requestAnimationFrame(draw);
     };
     frame = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(frame);
-  }, [page.width, page.height, scale, trail]);
+  }, [page.width, page.height, fit, size, trail, laserWidth, view]);
   const point = (e: {
     clientX: number;
     clientY: number;
@@ -291,15 +306,18 @@ export default function Stage({
     gesture.current = null;
     swipe.current = null;
     tap.current = null;
+    if (interacting.current) commitView();
     onNavigate(dx < 0 ? 1 : -1);
     return true;
   };
   const down = (e: ReactPointerEvent) => {
+    const { zoom, pan } = view.current;
     if (e.button !== 0 && e.pointerType === 'mouse') return;
     e.currentTarget.setPointerCapture(e.pointerId);
     if (e.pointerType === 'touch') {
       touches.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
       if (touches.current.size === 2) {
+        beginView();
         tap.current = {
           ids: new Set(touches.current.keys()),
           starts: new Map(touches.current),
@@ -346,12 +364,13 @@ export default function Stage({
       else if (selectedTool === 'select')
         kind =
           selection.length &&
-          page.strokes.some((s) => selection.includes(s.id) && strokeHit(s, p, 18 / scale))
+          page.strokes.some((s) => selection.includes(s.id) && strokeHit(s, p, 18 / screenScale()))
             ? 'move'
             : 'lasso';
       else if (selectedTool === 'eraser') kind = 'erase';
       else if (selectedTool === 'laser') kind = 'laser';
     }
+    if (kind === 'pan') beginView();
     gesture.current = {
       kind,
       id: e.pointerId,
@@ -376,7 +395,7 @@ export default function Stage({
       setDraft(s);
     }
     if (kind === 'erase') {
-      gesture.current.result = page.strokes.filter((s) => !strokeHit(s, p, 12 / scale));
+      gesture.current.result = page.strokes.filter((s) => !strokeHit(s, p, 12 / screenScale()));
       setWorking(gesture.current.result);
     }
     if (kind === 'lasso') {
@@ -397,8 +416,8 @@ export default function Stage({
         g = pinch.current,
         r = viewport.current!.getBoundingClientRect();
       const z = clamp((g.zoom * Math.hypot(a.x - b.x, a.y - b.y)) / (g.distance || 1), 1, 5);
-      setZoom(z);
-      setPan(
+      moveView(
+        z,
         limit(
           {
             x: (a.x + b.x) / 2 - r.left - size.w / 2 - g.anchor.x * fit * z,
@@ -417,7 +436,10 @@ export default function Stage({
     }
     const p = point(e);
     if (g.kind === 'pan') {
-      setPan(limit({ x: g.pan.x + e.clientX - g.client.x, y: g.pan.y + e.clientY - g.client.y }));
+      moveView(
+        view.current.zoom,
+        limit({ x: g.pan.x + e.clientX - g.client.x, y: g.pan.y + e.clientY - g.client.y }),
+      );
       return;
     }
     if (g.kind === 'laser') {
@@ -435,13 +457,13 @@ export default function Stage({
           pointerType: e.pointerType,
         });
         const last = g.points.at(-1)!;
-        if (Math.hypot(pt.x - last.x, pt.y - last.y) > 0.25 / scale) g.points.push(pt);
+        if (Math.hypot(pt.x - last.x, pt.y - last.y) > 0.25 / screenScale()) g.points.push(pt);
       }
       setDraft({ ...g.stroke!, points: [...g.points] });
     }
     if (g.kind === 'erase') {
       g.points.push(p);
-      g.result = (g.result || g.original).filter((s) => !strokeHit(s, p, 12 / scale));
+      g.result = (g.result || g.original).filter((s) => !strokeHit(s, p, 12 / screenScale()));
       setWorking(g.result);
     }
     if (g.kind === 'lasso') {
@@ -471,10 +493,12 @@ export default function Stage({
     }
     touches.current.delete(e.pointerId);
     if (e.pointerType === 'touch' && nativePinch.current) {
+      if (interacting.current) commitView();
       gesture.current = null;
       return;
     }
     if (pinch.current) {
+      if (interacting.current) commitView();
       if (touches.current.size < 2) pinch.current = null;
       gesture.current = null;
       return;
@@ -482,6 +506,7 @@ export default function Stage({
     const g = gesture.current;
     if (!g || g.id !== e.pointerId) return;
     gesture.current = null;
+    if (g.kind === 'pan') commitView();
     if (!cancel) {
       if (g.kind === 'draw')
         onChange({
@@ -500,7 +525,9 @@ export default function Stage({
         );
       }
       if (g.kind === 'erase')
-        g.result = (g.result || g.original).filter((s) => !strokeHit(s, point(e), 12 / scale));
+        g.result = (g.result || g.original).filter(
+          (s) => !strokeHit(s, point(e), 12 / screenScale()),
+        );
       if ((g.kind === 'erase' || g.kind === 'move') && g.result)
         onChange({ ...pageRef.current, strokes: g.result });
       if (g.kind === 'lasso')
@@ -532,12 +559,13 @@ export default function Stage({
           nativePinch.current = null;
           const g = gesture.current;
           if (g?.pointerType === 'touch') {
-            if (g.kind === 'pan') setPan(g.pan);
+            if (g.kind === 'pan') moveView(view.current.zoom, g.pan);
             gesture.current = null;
             setDraft(null);
             setWorking(null);
             setLasso([]);
           }
+          if (interacting.current) commitView();
           palm.current.penDown(e.pointerId, performance.now());
           touches.current.clear();
           pinch.current = null;
@@ -595,6 +623,7 @@ export default function Stage({
       }}
       onPointerDown={down}
       onTouchStart={(e) => {
+        const { zoom, pan } = view.current;
         const contacts = Array.from(e.touches) as Array<
           (typeof e.touches)[0] & { radiusX?: number; radiusY?: number; touchType?: string }
         >;
@@ -615,7 +644,8 @@ export default function Stage({
           )
         ) {
           swipe.current = null;
-          if (!nativePinch.current) {
+          if (!nativePinch.current || nativePinch.current.ending) {
+            beginView();
             const [a, b] = contacts,
               r = viewport.current!.getBoundingClientRect();
             const mid = {
@@ -711,8 +741,8 @@ export default function Stage({
               1,
               5,
             );
-          setZoom(z);
-          setPan(
+          moveView(
+            z,
             limit(
               {
                 x: (a.clientX + b.clientX) / 2 - r.left - size.w / 2 - n.anchor.x * fit * z,
@@ -741,6 +771,7 @@ export default function Stage({
       onTouchEnd={(e) => {
         if (nativePinch.current) {
           nativePinch.current.ending = true;
+          if (interacting.current) commitView();
           if (!e.touches.length) {
             nativePinch.current = null;
             touches.current.clear();
@@ -761,6 +792,7 @@ export default function Stage({
       onTouchCancel={() => {
         swipe.current = null;
         if (nativePinch.current) {
+          if (interacting.current) commitView();
           nativePinch.current = null;
           touches.current.clear();
           pinch.current = null;
@@ -779,8 +811,17 @@ export default function Stage({
       }}
       onContextMenu={(e) => e.preventDefault()}
       onWheel={(e) => {
-        if (e.ctrlKey || e.metaKey) setZoom(clamp(zoom - e.deltaY * 0.005, 1, 5));
-        else if (zoom > 1) setPan(limit({ x: pan.x - e.deltaX, y: pan.y - e.deltaY }));
+        beginView();
+        const current = view.current;
+        if (e.ctrlKey || e.metaKey) {
+          const z = clamp(current.zoom - e.deltaY * 0.005, 1, 5);
+          moveView(z, limit(current.pan, z));
+        } else if (current.zoom > 1)
+          moveView(
+            current.zoom,
+            limit({ x: current.pan.x - e.deltaX, y: current.pan.y - e.deltaY }, current.zoom),
+          );
+        commitSoon();
       }}
     >
       <div
@@ -788,20 +829,20 @@ export default function Stage({
         className="pdf-page"
         data-testid="pdf-page"
         style={{
-          width: page.width * scale,
-          height: page.height * scale,
-          transform: `translate(${pan.x}px, ${pan.y}px)`,
+          width: page.width * fit,
+          height: page.height * fit,
+          transform: `translate3d(${pan.x}px, ${pan.y}px, 0) scale(${zoom})`,
         }}
       >
         <canvas ref={pdfCanvas} className="pdf-canvas" />
         <canvas ref={inkCanvas} className="ink-canvas" data-testid="ink-canvas" />
-        <canvas ref={laserCanvas} className="laser-canvas" />
         {page.videos.map((v) => (
           <VideoBox
             key={v.id}
             video={v}
             page={page}
             editing={!lecture && tool === 'hand'}
+            displayZoom={zoom}
             onChange={changeVideo}
             onDelete={() =>
               onChange({ ...page, videos: page.videos.filter((item) => item.id !== v.id) })
@@ -810,6 +851,7 @@ export default function Stage({
         ))}
         {loading && <div className="pdf-loading">ページを読み込み中…</div>}
       </div>
+      <canvas ref={laserCanvas} className="laser-canvas" />
       {!!selection.length && (
         <button
           className="selection-delete"

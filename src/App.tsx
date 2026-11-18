@@ -720,65 +720,70 @@ export default function App() {
         </>
       ) : (
         <>
-          <header className="editor-header">
-            <IconButton label="ライブラリに戻る" onClick={returnLibrary}>
-              <ArrowLeft size={21} />
-            </IconButton>
-            <span className="small-brand">
-              <BookOpen size={21} />
-            </span>
-            <button
-              className="document-title"
-              title="資料名を変更"
-              onClick={() => setDialog({ kind: 'rename', id: project.id, value: project.name })}
-            >
-              {project.name}
-              <span>⌄</span>
-            </button>
-            <span className={`save-status ${saved ? '' : 'saving'}`}>
-              {saved ? <Check size={14} /> : <Loader2 size={14} className="spin" />}
-              {saved ? '保存済み' : '保存中'}
-            </span>
-            <div className="header-end">
-              <UpdateButton beforeReload={beforeReload} />
-              <details className="export-menu">
-                <summary className="secondary">
-                  <Download size={17} />
-                  <span>書き出す</span>
-                </summary>
-                <div className="dropdown">
-                  <button onClick={backup}>
-                    <Download size={17} /> 編集可能なバックアップ
-                  </button>
-                  <button onClick={exportDocument}>
-                    <FileText size={17} /> 書き込み入りPDF
-                  </button>
-                  <button
-                    onClick={() => {
-                      append.current = true;
-                      input.current?.click();
-                    }}
-                  >
-                    <FilePlus2 size={17} /> PDFのページを追加
-                  </button>
-                  <button onClick={() => setDialog({ kind: 'help' })}>
-                    <CircleHelp size={17} /> 使い方と保存について
-                  </button>
-                </div>
-              </details>
+          {!lecture && (
+            <header className="editor-header">
+              <IconButton label="ライブラリに戻る" onClick={returnLibrary}>
+                <ArrowLeft size={21} />
+              </IconButton>
+              <span className="small-brand">
+                <BookOpen size={21} />
+              </span>
               <button
-                className={`primary lecture-button ${lecture ? 'is-lecture' : ''}`}
-                onClick={toggleLecture}
+                className="document-title"
+                title="資料名を変更"
+                onClick={() => setDialog({ kind: 'rename', id: project.id, value: project.name })}
               >
-                <Presentation size={18} />
-                {lecture ? '編集に戻る' : '講義を始める'}
+                {project.name}
+                <span>⌄</span>
               </button>
-            </div>
-          </header>
+              <span className={`save-status ${saved ? '' : 'saving'}`}>
+                {saved ? <Check size={14} /> : <Loader2 size={14} className="spin" />}
+                {saved ? '保存済み' : '保存中'}
+              </span>
+              <div className="header-end">
+                <UpdateButton beforeReload={beforeReload} />
+                <details className="export-menu">
+                  <summary className="secondary">
+                    <Download size={17} />
+                    <span>書き出す</span>
+                  </summary>
+                  <div className="dropdown">
+                    <button onClick={backup}>
+                      <Download size={17} /> 編集可能なバックアップ
+                    </button>
+                    <button onClick={exportDocument}>
+                      <FileText size={17} /> 書き込み入りPDF
+                    </button>
+                    <button
+                      onClick={() => {
+                        append.current = true;
+                        input.current?.click();
+                      }}
+                    >
+                      <FilePlus2 size={17} /> PDFのページを追加
+                    </button>
+                    <button onClick={() => setDialog({ kind: 'help' })}>
+                      <CircleHelp size={17} /> 使い方と保存について
+                    </button>
+                  </div>
+                </details>
+                <button
+                  className={`primary lecture-button ${lecture ? 'is-lecture' : ''}`}
+                  onClick={toggleLecture}
+                >
+                  <Presentation size={18} />
+                  {lecture ? '編集に戻る' : '講義を始める'}
+                </button>
+              </div>
+            </header>
+          )}
           <div className="toolbar">
             <div className="tool-group">
               {tools
-                .filter((t) => !lecture || ['pen', 'eraser', 'laser', 'hand'].includes(t.id))
+                .filter(
+                  (t) =>
+                    !lecture || ['pen', 'highlighter', 'eraser', 'laser', 'hand'].includes(t.id),
+                )
                 .map((t) => (
                   <button
                     key={t.id}
@@ -836,16 +841,23 @@ export default function App() {
               <label className="width-select">
                 <span
                   className="width-preview"
-                  style={{ height: Math.min(width, 10), background: color }}
+                  style={{
+                    height: Math.min(tool === 'laser' ? preferences.laserWidth : width, 10),
+                    background: tool === 'laser' ? '#ff3c3c' : color,
+                  }}
                 />
                 <select
-                  aria-label="ペンの太さ"
-                  value={width}
-                  onChange={(e) => setWidth(Number(e.target.value))}
+                  aria-label={tool === 'laser' ? 'レーザーの太さ' : 'ペンの太さ'}
+                  value={tool === 'laser' ? preferences.laserWidth : width}
+                  onChange={(e) =>
+                    tool === 'laser'
+                      ? setPreferences((p) => ({ ...p, laserWidth: Number(e.target.value) }))
+                      : setWidth(Number(e.target.value))
+                  }
                 >
-                  {[1, 2.5, 4, 7, 10].map((v) => (
+                  {(tool === 'laser' ? [2, 4, 6, 8, 12] : [1, 2.5, 4, 7, 10]).map((v) => (
                     <option key={v} value={v}>
-                      {v} pt
+                      {v} {tool === 'laser' ? 'px' : 'pt'}
                     </option>
                   ))}
                 </select>
@@ -865,13 +877,15 @@ export default function App() {
               </IconButton>
             </div>
             <div className="toolbar-divider" />
-            <IconButton
-              label="ページ一覧"
-              onClick={() => setSidebar((s) => !s)}
-              active={sidebar && !lecture}
-            >
-              <LayoutGrid size={21} />
-            </IconButton>
+            {!lecture && (
+              <IconButton
+                label="ページ一覧"
+                onClick={() => setSidebar((s) => !s)}
+                active={sidebar && !lecture}
+              >
+                <LayoutGrid size={21} />
+              </IconButton>
+            )}
             <details className="settings-menu">
               <summary className="icon-button" title="入力設定" aria-label="入力設定">
                 <Settings2 size={20} />
@@ -969,6 +983,22 @@ export default function App() {
                 </button>
               </div>
             </details>
+            {lecture && (
+              <>
+                <span
+                  className="lecture-save-indicator"
+                  role="status"
+                  aria-label={saved ? '保存済み' : '保存中'}
+                  title={saved ? '保存済み' : '保存中'}
+                >
+                  {saved ? <Check size={15} /> : <Loader2 size={15} className="spin" />}
+                </span>
+                <button className="lecture-exit" onClick={toggleLecture} aria-label="編集に戻る">
+                  <ArrowLeft size={17} />
+                  <span>編集に戻る</span>
+                </button>
+              </>
+            )}
           </div>
           <div className="editor-body">
             {sidebar && !lecture && (
@@ -1032,6 +1062,7 @@ export default function App() {
                   tool={tool}
                   color={color}
                   width={width}
+                  laserWidth={preferences.laserWidth}
                   fingerInk={fingerInk}
                   pencilTool={pencilTool.current}
                   palmRejection={preferences.palmRejection}

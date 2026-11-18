@@ -127,4 +127,31 @@ describe('laser trail compositing', () => {
     expect(ctx.arc).toHaveBeenCalledTimes(1);
     expect(ctx.quadraticCurveTo).toHaveBeenCalledTimes(18);
   });
+  it('uses the configured screen width independently of page zoom', () => {
+    const widths: number[] = [];
+    const ctx = {
+      save: vi.fn(),
+      restore: vi.fn(),
+      beginPath: vi.fn(),
+      moveTo: vi.fn(),
+      lineTo: vi.fn(),
+      quadraticCurveTo: vi.fn(),
+      stroke: () => widths.push(ctx.lineWidth),
+      arc: vi.fn(),
+      fill: vi.fn(),
+      lineWidth: 0,
+    } as unknown as CanvasRenderingContext2D;
+    drawLaser(
+      ctx,
+      [
+        { x: 0, y: 0, t: 0 },
+        { x: 10, y: 10, t: 10 },
+      ],
+      2,
+      20,
+      true,
+      12,
+    );
+    expect(widths[0]).toBe(6);
+  });
 });

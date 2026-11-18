@@ -135,7 +135,7 @@ test('finger writing accepts broad contacts and yields to native pinch on a phon
   });
   await nativeTouch(page, 'touchmove', [am, bm]);
   await expect
-    .poll(async () => Number(await page.getByLabel('表示倍率').inputValue()))
+    .poll(async () => (await page.getByTestId('pdf-page').boundingBox())!.width / r.width)
     .toBeGreaterThan(2);
   await pointer(page, 'pointerup', 11, 'touch', am.clientX, am.clientY);
   await nativeTouch(page, 'touchend', [bm], [am]);

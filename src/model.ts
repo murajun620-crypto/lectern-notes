@@ -112,6 +112,7 @@ export function drawLaser(
   scale: number,
   now: number,
   trail: boolean,
+  width = 4,
 ) {
   const head = points.at(-1);
   if (!head) return;
@@ -120,7 +121,7 @@ export function drawLaser(
   if (trail && points.length > 1) {
     ctx.globalAlpha = opacity * 0.55;
     ctx.strokeStyle = '#fb403b';
-    ctx.lineWidth = 4 / scale;
+    ctx.lineWidth = width / scale;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     ctx.beginPath();
@@ -132,7 +133,7 @@ export function drawLaser(
   ctx.shadowBlur = 12;
   ctx.fillStyle = '#ff3c3c';
   ctx.beginPath();
-  ctx.arc(head.x, head.y, 6 / scale, 0, Math.PI * 2);
+  ctx.arc(head.x, head.y, Math.max(5, width * 0.9 + 2) / scale, 0, Math.PI * 2);
   ctx.fill();
   ctx.shadowBlur = 0;
   ctx.strokeStyle = 'white';

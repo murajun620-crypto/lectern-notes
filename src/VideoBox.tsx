@@ -54,12 +54,14 @@ export default function VideoBox({
   video: v,
   page,
   editing,
+  displayZoom = 1,
   onChange,
   onDelete,
 }: {
   video: Video;
   page: Page;
   editing: boolean;
+  displayZoom?: number;
   onChange: (v: Video) => void;
   onDelete: () => void;
 }) {
@@ -85,15 +87,15 @@ export default function VideoBox({
   useLayoutEffect(() => {
     const parent = box.current!.parentElement!;
     const resize = () => {
-      const r = parent.getBoundingClientRect();
-      setPaperSize({ width: r.width, height: r.height });
+      const style = getComputedStyle(parent);
+      setPaperSize({ width: parseFloat(style.width), height: parseFloat(style.height) });
     };
     resize();
     const observer = new ResizeObserver(resize);
     observer.observe(parent);
     return () => observer.disconnect();
   }, []);
-  const compact = shown.width * (paperSize.width / page.width) < 180;
+  const compact = shown.width * (paperSize.width / page.width) * displayZoom < 180;
   const showPreview = (next: Video | null) => {
     previewRef.current = next;
     setPreview(next);
@@ -181,7 +183,7 @@ export default function VideoBox({
       data-player-state={playbackState}
       style={
         playing && paperSize.width
-          ? playbackRect(v, paperSize, page)
+          ? playbackRect(v, paperSize, page, displayZoom)
           : {
               left: `${(shown.x / page.width) * 100}%`,
               top: `${(shown.y / page.height) * 100}%`,
@@ -197,7 +199,17 @@ export default function VideoBox({
     >
       {playing ? (
         <>
-          <div ref={host} className="player-host" />
+          <div
+            ref={host}
+            className="player-host"
+            // Keep the iframe's own viewport at its screen size, including YouTube's minimum.
+            style={{
+              width: `${displayZoom * 100}%`,
+              height: `${displayZoom * 100}%`,
+              transform: `scale(${1 / displayZoom})`,
+              transformOrigin: 'top left',
+            }}
+          />
           {!ready && !error && <span className="video-loading">YouTubeに接続中…</span>}
           {blocked && !error && <span className="video-hint">動画内の ▶ をタップしてください</span>}
           {error && (

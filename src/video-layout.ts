@@ -9,11 +9,15 @@ export function playbackRect(
   v: Video,
   paper: { width: number; height: number },
   page: Pick<Page, 'width' | 'height'>,
+  displayZoom = 1,
 ) {
   const scale = paper.width / page.width;
   // Thumbnail dimensions are independent of YouTube's minimum 200 x 200 player viewport.
-  const width = Math.max(240, Math.min(Math.max(v.width * scale, 360), paper.width));
-  const height = Math.max(200, Math.min((width * 9) / 16, paper.height));
+  const width = Math.max(
+    240 / displayZoom,
+    Math.min(Math.max(v.width * scale, 360 / displayZoom), paper.width),
+  );
+  const height = Math.max(200 / displayZoom, Math.min((width * 9) / 16, paper.height));
   return {
     left: clamp(v.x * scale, 0, Math.max(0, paper.width - width)),
     top: clamp(v.y * scale, 0, Math.max(0, paper.height - height)),
