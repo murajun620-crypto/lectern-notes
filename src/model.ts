@@ -245,21 +245,13 @@ export function penOutline(stroke: Stroke) {
     }),
   };
   const path = getStrokePoints(samples, options);
-  const length = path.at(-1)?.runningLength ?? 0;
-  if (!penKind && length > 0 && length < 3) {
-    // perfect-freehand skips vertices within three units of the end. On an entire
-    // sub-three-unit mark that skips the start as well, inflating its round cap.
-    // Construct this outline in larger units and map it back to page coordinates.
-    const scale = 4 / length;
-    for (const p of path) {
-      p.point = [p.point[0] * scale, p.point[1] * scale];
-      p.distance *= scale;
-      p.runningLength *= scale;
-    }
-    return getStrokeOutlinePoints(path, { ...options, size: width * scale }).map(([x, y]) => [
-      x / scale,
-      y / scale,
-    ]);
+  const tip = path.at(-1);
+  if (!penKind && tip) {
+    // perfect-freehand skips vertices within 3 units of the final runningLength.
+    // On a turn this cuts across the last contacts, leaving a thin neck at the
+    // round cap. The standard pen has no taper; offset this cutoff without
+    // moving the tip or changing its direction or pressure.
+    tip.runningLength += 3;
   }
   return getStrokeOutlinePoints(path, options);
 }

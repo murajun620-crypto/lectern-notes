@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { effectiveTool, PalmGuard } from './input';
 import { enlargedVideoRect, initialVideoRect, playerViewport, resizeVideo } from './video-layout';
-import { penKinds, penOutline, drawLaser, strokeCenterline } from './model';
+import { penKinds, penOutline, drawLaser, pointInPolygon, strokeCenterline } from './model';
 describe('automatic Pencil and finger routing', () => {
   it('keeps the last Pencil tool while hand mode remains available to mouse', () => {
     expect(effectiveTool('hand', 'pen', 'pen', false)).toBe('pen');
@@ -118,6 +118,17 @@ describe('smooth pressure-bearing stroke outline', () => {
       expect(Math.min(...ys)).toBeCloseTo(199.5, 1);
       expect(Math.max(...ys)).toBeCloseTo(200.5, 1);
     }
+  });
+  it('connects a tight terminal turn to the round tip at the recorded nib width', () => {
+    const points = [
+      ...Array.from({ length: 25 }, (_, i) => ({ x: i / 2, y: 0, p: 0.5 })),
+      ...[0.5, 1, 1.5].map((y) => ({ x: 12, y, p: 0.5 })),
+    ];
+    const outline = penOutline({ ...stroke, width: 1, points });
+    const polygon = outline.map(([x, y]) => ({ x, y, p: 0.5 }));
+    for (const p of points.slice(-6, -1)) expect(pointInPolygon(p, polygon)).toBe(true);
+    expect(pointInPolygon({ x: 11, y: -0.3, p: 0.5 }, polygon)).toBe(true);
+    expect(Math.max(...outline.map(([, y]) => y))).toBeCloseTo(2, 2);
   });
   it('keeps very light pressure visible and still varies width with pressure', () => {
     const extent = (p: number) => {

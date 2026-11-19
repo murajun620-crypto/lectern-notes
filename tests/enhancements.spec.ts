@@ -294,6 +294,48 @@ test('Pencil writes in hand mode, a resting palm stays blocked, and two-finger t
 test.describe('Pencil contact samples', () => {
   test.use({ viewport: { width: 1024, height: 768 }, deviceScaleFactor: 2 });
 
+  test('keeps a fine Pencil hook connected to its endpoint after lift', async ({ page }) => {
+    await demo(page);
+    await page.getByLabel('ペンの太さ', { exact: true }).selectOption('1');
+    await page.getByLabel('表示倍率').selectOption('10');
+    const pdf = (await page.getByTestId('pdf-page').boundingBox())!;
+    const viewport = (await page.getByTestId('stage').boundingBox())!;
+    const scale = pdf.width / (await stored(page))[0].pages[0].width;
+    const origin = { x: viewport.x + viewport.width / 2, y: viewport.y + viewport.height / 2 };
+    const tip = (x: number, y: number) => ({
+      identifier: 43,
+      touchType: 'stylus',
+      force: 0.5,
+      clientX: origin.x + x * scale,
+      clientY: origin.y + y * scale,
+    });
+    await nativeTouch(page, 'touchstart', [tip(0, 0)]);
+    for (let x = 0.5; x <= 12; x += 0.5) await nativeTouch(page, 'touchmove', [tip(x, 0)]);
+    for (const y of [0.5, 1, 1.5]) await nativeTouch(page, 'touchmove', [tip(12, y)]);
+    await nativeTouch(page, 'touchend', [], [tip(12, 6)]);
+
+    const coverage = () =>
+      page.getByTestId('ink-canvas').evaluate(
+        (c: HTMLCanvasElement, at) => {
+          const r = c.getBoundingClientRect();
+          const ctx = c.getContext('2d')!;
+          return [
+            [11.5, 0],
+            [12, 0.5],
+            [12, 1.5],
+            [12, 3],
+          ].map(([x, y]) => {
+            const px = Math.floor(((at.x + x * at.scale - r.x) * c.width) / r.width);
+            const py = Math.floor(((at.y + y * at.scale - r.y) * c.height) / r.height);
+            return ctx.getImageData(px, py, 1, 1).data[3] > 100;
+          });
+        },
+        { ...origin, scale },
+      );
+    await expect.poll(coverage).toEqual([true, true, true, false]);
+    await expect.poll(async () => (await stored(page))[0].pages[0].strokes.length).toBe(1);
+  });
+
   test('claims Pencil taps on the writing surface and leaves finger and video taps available', async ({
     page,
   }) => {
