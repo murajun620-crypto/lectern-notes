@@ -131,6 +131,22 @@ describe('smooth pressure-bearing stroke outline', () => {
       expect(dot.flat().every(Number.isFinite)).toBe(true);
     }
   });
+  it('keeps short brush marks visible as contact samples arrive', () => {
+    for (const count of [2, 3, 7]) {
+      const outline = penOutline({
+        ...stroke,
+        penKind: 'brush',
+        width: 4,
+        points: Array.from({ length: count }, (_, i) => ({
+          x: (4 * i) / (count - 1),
+          y: 0,
+          p: 0.05,
+        })),
+      });
+      const ys = outline.map(([, y]) => y);
+      expect(Math.max(...ys) - Math.min(...ys)).toBeGreaterThan(2);
+    }
+  });
   it('interpolates sparse pen curves inside the contact span and preserves pressure and corners', () => {
     const points = [
       { x: 0, y: 0, p: 0.12 },

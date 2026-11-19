@@ -58,7 +58,7 @@ type Props = {
   inkPriority: InkPriority;
   onCopyInk: (strokes: Stroke[]) => void;
   setZoom: (z: number) => void;
-  onChange: (page: Page) => void;
+  onChange: (pageId: string, edit: (previous: Page) => Page) => void;
   onNavigate: (delta: number) => void;
   onError: (s: string) => void;
 };
@@ -121,8 +121,6 @@ export default function Stage({
     () => selectionPreview && changeSelection(page.strokes, selectionIds, selectionPreview),
     [page.strokes, selectionIds, selectionPreview],
   );
-  const pageRef = useRef(page);
-  pageRef.current = page;
   const gesture = useRef<{
     kind: GestureKind;
     id: number;
@@ -478,7 +476,10 @@ export default function Stage({
   };
   const removeSelection = () => {
     if (!selected.length) return;
-    onChange({ ...page, strokes: page.strokes.filter((stroke) => !selectionIds.has(stroke.id)) });
+    onChange(page.id, (prev) => ({
+      ...prev,
+      strokes: prev.strokes.filter((stroke) => !selectionIds.has(stroke.id)),
+    }));
     setSelection([]);
     setPasteAnchor(null);
   };
@@ -487,18 +488,17 @@ export default function Stage({
     onCopyInk(selected);
     if (cut) removeSelection();
   };
-  const commitSelection = (original: Stroke[], ids: Set<string>, transform: InkTransform) => {
+  const commitSelection = (ids: Set<string>, transform: InkTransform) => {
     if (transform.scale === 1 && transform.x === 0 && transform.y === 0) return;
-    onChange({ ...pageRef.current, strokes: changeSelection(original, ids, transform) });
+    onChange(page.id, (prev) => ({
+      ...prev,
+      strokes: changeSelection(prev.strokes, ids, transform),
+    }));
   };
   const resizeSelection = (factor: number) => {
     if (!selectionShape) return;
     const center = centerOf(selectionShape.bounds);
-    commitSelection(
-      page.strokes,
-      selectionIds,
-      selectionTransform(selectionShape, page, center, center, factor),
-    );
+    commitSelection(selectionIds, selectionTransform(selectionShape, page, center, center, factor));
   };
   const addInk = (source: Stroke[], shape: InkSelection, destination: Position) => {
     const { left, top, right, bottom } = shape.bounds;
@@ -514,7 +514,7 @@ export default function Stage({
       ...transformStroke(stroke, scale, x, y),
       id: uid(),
     }));
-    onChange({ ...page, strokes: [...page.strokes, ...copies] });
+    onChange(page.id, (prev) => ({ ...prev, strokes: [...prev.strokes, ...copies] }));
     setPasteAnchor(null);
     setSelection(copies.map((stroke) => stroke.id));
   };
@@ -871,23 +871,23 @@ export default function Stage({
     }
     if (g.kind === 'draw' && (!cancel || (g.pointerType === 'pen' && g.points.length > 1))) {
       // Lift-off coordinates can already belong to hover or the next stroke.
-      onChange({
-        ...pageRef.current,
-        strokes: [...pageRef.current.strokes, g.stroke!],
-      });
+      const stroke = g.stroke!;
+      onChange(page.id, (prev) => ({ ...prev, strokes: [...prev.strokes, stroke] }));
     }
     if (!cancel) {
       // Commit event-time data, never React's potentially deferred pointermove render.
       if (g.kind === 'move' || g.kind === 'resize') {
         const transform = dragSelection(g, e);
-        if (transform) commitSelection(g.original, g.selection, transform);
+        if (transform) commitSelection(g.selection, transform);
       }
       if (g.kind === 'erase') {
         const p = point(e),
           last = g.points.at(-1)!;
         if (Math.hypot(p.x - last.x, p.y - last.y) > 1e-6) g.points.push(p);
-        const result = applyErasure(g.original, { ...g.erasure!, points: g.points });
-        if (result !== g.original) onChange({ ...pageRef.current, strokes: result });
+        onChange(page.id, (prev) => {
+          const strokes = applyErasure(prev.strokes, { ...g.erasure!, points: g.points });
+          return strokes === prev.strokes ? prev : { ...prev, strokes };
+        });
       }
       if (g.kind === 'lasso') {
         g.points.push(point(e));
@@ -924,13 +924,16 @@ export default function Stage({
           displayZoom={zoom}
           visibleBounds={visibleBounds}
           onChange={(next) =>
-            onChange({
-              ...owner,
-              videos: owner.videos.map((item) => (item.id === next.id ? next : item)),
-            })
+            onChange(owner.id, (prev) => ({
+              ...prev,
+              videos: prev.videos.map((item) => (item.id === next.id ? next : item)),
+            }))
           }
           onDelete={() =>
-            onChange({ ...owner, videos: owner.videos.filter((item) => item.id !== v.id) })
+            onChange(owner.id, (prev) => ({
+              ...prev,
+              videos: prev.videos.filter((item) => item.id !== v.id),
+            }))
           }
         />
       );

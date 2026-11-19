@@ -293,6 +293,96 @@ test('Pencil writes in hand mode, a resting palm stays blocked, and two-finger t
 test.describe('Pencil contact samples', () => {
   test.use({ viewport: { width: 1024, height: 768 }, deviceScaleFactor: 2 });
 
+  test('fast short marks with every pen survive batching, render, and save without lift-off lines', async ({
+    page,
+  }) => {
+    await demo(page);
+    await page.getByLabel('ペンの太さ', { exact: true }).selectOption('4');
+    await page.getByLabel('入力設定', { exact: true }).click();
+    await page.getByLabel('Pencilの筆圧で線の太さを変える').check();
+    await page.getByLabel('入力設定', { exact: true }).click();
+    const stage = page.getByTestId('stage');
+    const paper = (await page.getByTestId('pdf-page').boundingBox())!;
+    const kinds = ['ballpoint', 'fountain', 'pencil', 'brush'];
+    const x = Math.round(paper.x + paper.width * 0.28);
+    const y = Math.round(paper.y + paper.height * 0.35);
+    for (const [row, kind] of kinds.entries()) {
+      await page.getByLabel('ペンの種類', { exact: true }).selectOption(kind);
+      await stage.evaluate(
+        (el, position) => {
+          HTMLElement.prototype.setPointerCapture = () => {};
+          for (let col = 0; col < 4; col++) {
+            const x = position.x + col * 24;
+            const send = (type: string, dx: number, dy: number, contact: boolean) =>
+              el.dispatchEvent(
+                new PointerEvent(type, {
+                  bubbles: true,
+                  pointerType: 'pen',
+                  pointerId: 43,
+                  isPrimary: true,
+                  clientX: x + dx,
+                  clientY: position.y + dy,
+                  button: 0,
+                  buttons: contact ? 1 : 0,
+                  pressure: contact ? 0.04 : 0,
+                }),
+              );
+            send('pointerdown', 0, 0, true);
+            if (col < 3) for (const dx of [2, 4, 6]) send('pointermove', dx, 0, true);
+            send('pointermove', 10, 10, false);
+            send('pointerup', 12, 16, false);
+          }
+        },
+        { x, y: y + row * 28 },
+      );
+    }
+    const expected = kinds.flatMap((kind) => [4, 4, 4, 1].map((count) => [kind, count]));
+    const savedMarks = async () => {
+      const project = (await stored(page))[0];
+      return project?.pages[0].strokes.map((s: { penKind: string; points: unknown[] }) => [
+        s.penKind,
+        s.points.length,
+      ]);
+    };
+    await expect.poll(savedMarks).toEqual(expected);
+    const sampleInk = () =>
+      page.getByTestId('ink-canvas').evaluate(
+        (canvas: HTMLCanvasElement, position) => {
+          const ctx = canvas.getContext('2d')!;
+          const r = canvas.getBoundingClientRect();
+          const peak = (x: number, y: number) => {
+            const px = Math.round(((x - r.left) * canvas.width) / r.width);
+            const py = Math.round(((y - r.top) * canvas.height) / r.height);
+            const rgba = ctx.getImageData(px - 1, py - 1, 3, 3).data;
+            return Math.max(...rgba.filter((_, i) => i % 4 === 3));
+          };
+          const marks: number[] = [];
+          const afterLift: number[] = [];
+          for (let row = 0; row < 4; row++) {
+            for (let col = 0; col < 4; col++) {
+              const x = position.x + col * 24;
+              const y = position.y + row * 28;
+              marks.push(peak(x + (col < 3 ? 3 : 0), y));
+              afterLift.push(peak(x + 10, y + 10));
+            }
+          }
+          return { marks: Math.min(...marks), afterLift: Math.max(...afterLift) };
+        },
+        { x, y },
+      );
+    const checkInk = async () => {
+      await expect.poll(async () => (await sampleInk()).marks).toBeGreaterThan(40);
+      expect((await sampleInk()).afterLift).toBe(0);
+    };
+    await checkInk();
+    await page.getByRole('button', { name: '元に戻す', exact: true }).click();
+    await expect.poll(savedMarks).toEqual(expected.slice(0, -1));
+    await page.getByRole('button', { name: 'やり直す', exact: true }).click();
+    await expect.poll(savedMarks).toEqual(expected);
+    await page.reload();
+    await checkInk();
+  });
+
   test('Pencil strokes stay continuous when a detailed batch loses contact flags', async ({
     page,
   }) => {

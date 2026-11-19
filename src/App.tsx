@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 import {
   ArrowLeft,
@@ -324,7 +324,9 @@ export default function App() {
     backupInput = useRef<HTMLInputElement>(null),
     append = useRef(false),
     current = useRef(project);
-  current.current = project;
+  useLayoutEffect(() => {
+    current.current = project;
+  }, [project]);
   const history = useRef(new Map<string, { undo: Page[]; redo: Page[] }>());
   const queue = useRef(Promise.resolve()),
     saveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -381,23 +383,36 @@ export default function App() {
     setProject((p) => (p ? { ...fn(p), updatedAt: Date.now() } : p));
   };
   const page = project?.pages[project.currentPage];
-  const changePage = useCallback((next: Page) => {
-    const p = current.current;
-    if (!p) return;
-    const prev = p.pages.find((pg) => pg.id === next.id);
-    if (!prev) return;
-    setSaved(false);
-    const h = history.current.get(next.id) || { undo: [], redo: [] };
-    h.undo.push(prev);
-    if (h.undo.length > 60) h.undo.shift();
-    h.redo = [];
-    history.current.set(next.id, h);
-    setProject({
-      ...p,
-      updatedAt: Date.now(),
-      pages: p.pages.map((pg) => (pg.id === next.id ? next : pg)),
+  const replacePage = useCallback((p: Project, next: Page) => {
+    const updatedAt = Date.now();
+    const replace = (base: Project) => ({
+      ...base,
+      updatedAt,
+      pages: base.pages.map((pg) => (pg.id === next.id ? next : pg)),
     });
+    // A second short stroke can finish before React renders the first edit.
+    const updated = replace(p);
+    current.current = updated;
+    setProject((base) => (base === p ? updated : base?.id === p.id ? replace(base) : base));
   }, []);
+  const changePage = useCallback(
+    (id: string, edit: (prev: Page) => Page) => {
+      const p = current.current;
+      if (!p) return;
+      const prev = p.pages.find((pg) => pg.id === id);
+      if (!prev) return;
+      const next = edit(prev);
+      if (next === prev) return;
+      setSaved(false);
+      const h = history.current.get(id) || { undo: [], redo: [] };
+      h.undo.push(prev);
+      if (h.undo.length > 60) h.undo.shift();
+      h.redo = [];
+      history.current.set(id, h);
+      replacePage(p, next);
+    },
+    [replacePage],
+  );
   const navigate = useCallback((delta: number) => {
     setSaved(false);
     setProject((p) =>
@@ -411,24 +426,23 @@ export default function App() {
       return currentPage < 0 ? p : { ...p, currentPage };
     });
   }, []);
-  const undoRedo = useCallback((redo = false) => {
-    const p = current.current;
-    if (!p) return;
-    const pg = p.pages[p.currentPage],
-      h = history.current.get(pg.id);
-    if (!h) return;
-    const from = redo ? h.redo : h.undo,
-      to = redo ? h.undo : h.redo;
-    const next = from.pop();
-    if (!next) return;
-    setSaved(false);
-    to.push(pg);
-    setProject({
-      ...p,
-      updatedAt: Date.now(),
-      pages: p.pages.map((item) => (item.id === pg.id ? next : item)),
-    });
-  }, []);
+  const undoRedo = useCallback(
+    (redo = false) => {
+      const p = current.current;
+      if (!p) return;
+      const pg = p.pages[p.currentPage],
+        h = history.current.get(pg.id);
+      if (!h) return;
+      const from = redo ? h.redo : h.undo,
+        to = redo ? h.undo : h.redo;
+      const next = from.pop();
+      if (!next) return;
+      setSaved(false);
+      to.push(pg);
+      replacePage(p, next);
+    },
+    [replacePage],
+  );
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement).closest('input,textarea,select,dialog') || busy || dialog)
@@ -579,17 +593,17 @@ export default function App() {
       return;
     }
     if (!page) return;
-    changePage({
-      ...page,
+    changePage(page.id, (prev) => ({
+      ...prev,
       videos: [
-        ...page.videos,
+        ...prev.videos,
         {
           id: uid(),
           videoId: source.id,
-          ...initialVideoRect(page, source.portrait),
+          ...initialVideoRect(prev, source.portrait),
         },
       ],
-    });
+    }));
     setDialog(null);
     setTool('hand');
   };

@@ -190,7 +190,17 @@ const thinningByPen = { ballpoint: 0.14, fountain: 0.82, pencil: 0.3, brush: 0.8
 export function penOutline(stroke: Stroke) {
   const { penKind, width } = stroke;
   const centerline = strokeCenterline(stroke);
-  const taper = penKind === 'brush' && centerline.length > 2;
+  let taper = 0;
+  if (penKind === 'brush' && centerline.length > 2) {
+    let length = 0;
+    for (let i = 1; i < centerline.length && length < width * 6; i++) {
+      const a = centerline[i - 1];
+      const b = centerline[i];
+      length += Math.hypot(b.x - a.x, b.y - a.y);
+    }
+    // Keep a body on short marks before bringing in the brush's tapered ends.
+    taper = clamp((length / width - 3) / 3, 0, 1);
+  }
   return getStroke(
     centerline.map((p, i) => {
       let pressure = Math.max(penKind === 'brush' ? 0.24 : 0.32, p.p);
@@ -213,7 +223,10 @@ export function penOutline(stroke: Stroke) {
       streamline: 0.2,
       simulatePressure: false,
       last: true,
-      ...(taper && { start: { taper: width * 0.65 }, end: { taper: width * 2.6 } }),
+      ...(taper > 0 && {
+        start: { taper: width * 0.65 * taper },
+        end: { taper: width * 2.6 * taper },
+      }),
     },
   );
 }
