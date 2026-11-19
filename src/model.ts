@@ -134,8 +134,8 @@ export function penOutline(stroke: Stroke) {
 
 type InkBounds = { left: number; top: number; right: number; bottom: number };
 const savedInkBounds = new WeakMap<Stroke, InkBounds>();
-export function strokeBounds(stroke: Stroke, draft = false): InkBounds {
-  const cached = draft ? undefined : savedInkBounds.get(stroke);
+export function strokeBounds(stroke: Stroke): InkBounds {
+  const cached = savedInkBounds.get(stroke);
   if (cached) return cached;
   let left = Infinity,
     top = Infinity,
@@ -155,7 +155,7 @@ export function strokeBounds(stroke: Stroke, draft = false): InkBounds {
     right: right + padding,
     bottom: bottom + padding,
   };
-  if (!draft) savedInkBounds.set(stroke, bounds);
+  savedInkBounds.set(stroke, bounds);
   return bounds;
 }
 export function traceCurve(
@@ -230,16 +230,34 @@ function clipErasures(ctx: CanvasRenderingContext2D, erasures: Erasure[]) {
     }
   }
 }
-const savedStrokePaths = new WeakMap<Stroke, Path2D>();
-function strokePath(stroke: Stroke, draft: boolean) {
-  const cached = draft ? undefined : savedStrokePaths.get(stroke);
-  if (cached) return cached;
+type StrokeShape = { points: number[][]; bounds: InkBounds };
+const strokePaths = new WeakMap<Stroke, { count: number; path: Path2D }>();
+function includeVertex(bounds: InkBounds, [x, y]: number[], padding: number) {
+  bounds.left = Math.min(bounds.left, x - padding);
+  bounds.top = Math.min(bounds.top, y - padding);
+  bounds.right = Math.max(bounds.right, x + padding);
+  bounds.bottom = Math.max(bounds.bottom, y + padding);
+}
+const emptyInkBounds = () => ({
+  left: Infinity,
+  top: Infinity,
+  right: -Infinity,
+  bottom: -Infinity,
+});
+
+export function strokeShape(stroke: Stroke) {
+  const count = stroke.points.length;
   const path = new Path2D();
+  const points =
+    stroke.tool === 'pen' ? penOutline(stroke) : stroke.points.map(({ x, y }) => [x, y]);
+  const bounds = emptyInkBounds();
+  for (const p of points)
+    includeVertex(bounds, p, stroke.tool === 'pen' ? 1 : stroke.width / 2 + 1);
   if (stroke.tool === 'highlighter') {
     traceCurve(path, stroke.points);
     if (stroke.points.length === 1) path.lineTo(stroke.points[0].x + 0.01, stroke.points[0].y);
   } else {
-    const outline = penOutline(stroke);
+    const outline = points;
     if (outline.length) {
       const first = outline[0],
         last = outline.at(-1)!;
@@ -252,14 +270,47 @@ function strokePath(stroke: Stroke, draft: boolean) {
       path.closePath();
     }
   }
-  if (!draft) savedStrokePaths.set(stroke, path);
-  return path;
+  strokePaths.set(stroke, { count, path });
+  return { path, points, bounds };
 }
 
-export function drawStrokes(ctx: CanvasRenderingContext2D, strokes: Stroke[], draft = false) {
+/** Quadratic segments only depend on neighboring vertices. Include both sides of edited spans. */
+export function changedStrokeBounds(previous: StrokeShape, next: StrokeShape, stroke: Stroke) {
+  const a = previous.points;
+  const b = next.points;
+  const match = (p: number[], q: number[]) => p[0] === q[0] && p[1] === q[1];
+  let start = 0;
+  while (start < a.length && start < b.length && match(a[start], b[start])) start++;
+  if (start === a.length && start === b.length) return null;
+  let i = a.length - 1;
+  let j = b.length - 1;
+  while (i >= start && j >= start && match(a[i], b[j])) {
+    i--;
+    j--;
+  }
+  const bounds = emptyInkBounds();
+  const padding = stroke.tool === 'pen' ? 1 : stroke.width / 2 + 1;
+  for (const [points, end] of [
+    [a, i],
+    [b, j],
+  ] as const) {
+    const from = Math.max(0, start - 2);
+    const to = Math.min(points.length - 1, end + 2);
+    for (let index = from; index <= to; index++) includeVertex(bounds, points[index], padding);
+    if (stroke.tool === 'pen' && points.length) {
+      if (from === 0) includeVertex(bounds, points[points.length - 1], padding);
+      if (to === points.length - 1) includeVertex(bounds, points[0], padding);
+    }
+  }
+  return bounds;
+}
+
+export function drawStrokes(ctx: CanvasRenderingContext2D, strokes: Stroke[]) {
   for (const stroke of strokes) {
     if (!stroke.points.length) continue;
-    const path = strokePath(stroke, draft);
+    // Active strokes only append samples. The last preview path can also paint the final stroke.
+    const cached = strokePaths.get(stroke);
+    const path = cached?.count === stroke.points.length ? cached.path : strokeShape(stroke).path;
     ctx.save();
     if (stroke.erasures?.length) clipErasures(ctx, stroke.erasures);
     if (stroke.tool === 'highlighter') {

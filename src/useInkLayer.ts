@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { RefObject } from 'react';
-import { drawStrokes, strokeBounds } from './model';
+import { changedStrokeBounds, drawStrokes, strokeBounds, strokeShape } from './model';
 import type { Page, Point, Stroke } from './model';
 import type { StackPage } from './page-stack';
 import { rasterScaleLimit } from './usePageViewport';
@@ -35,6 +35,18 @@ function clearCanvas(canvas: HTMLCanvasElement, width: number, height: number) {
 }
 
 type InkBounds = ReturnType<typeof strokeBounds>;
+function inPixels(
+  ctx: CanvasRenderingContext2D,
+  { left, top, right, bottom }: InkBounds,
+  draw: () => void,
+) {
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(left, top, right - left, bottom - top);
+  ctx.clip();
+  draw();
+  ctx.restore();
+}
 function pixelBounds(geometry: InkGeometry, bounds: InkBounds): InkBounds {
   const { x, y, scale, width, height, pageWidth, pageHeight } = geometry;
   return {
@@ -43,6 +55,13 @@ function pixelBounds(geometry: InkGeometry, bounds: InkBounds): InkBounds {
     right: Math.min(width, Math.ceil(x + Math.min(pageWidth, bounds.right) * scale) + 1),
     bottom: Math.min(height, Math.ceil(y + Math.min(pageHeight, bounds.bottom) * scale) + 1),
   };
+}
+
+function visibleStrokes(geometry: InkGeometry, strokes: Stroke[]) {
+  return strokes.filter((stroke) => {
+    const { left, right, top, bottom } = pixelBounds(geometry, strokeBounds(stroke));
+    return right > left && bottom > top;
+  });
 }
 
 function paintChanges(
@@ -79,12 +98,9 @@ function paintChanges(
     return bounds.right > left && bounds.left < right && bounds.top < bottom && bounds.bottom > top;
   });
   ctx.clearRect(left, top, right - left, bottom - top);
-  ctx.save();
-  ctx.beginPath();
-  ctx.rect(left, top, right - left, bottom - top);
-  ctx.clip();
-  inPage(ctx, geometry, () => drawStrokes(ctx, intersecting));
-  ctx.restore();
+  inPixels(ctx, { left, top, right, bottom }, () =>
+    inPage(ctx, geometry, () => drawStrokes(ctx, intersecting)),
+  );
 }
 
 /** Rasterize the visible ink at screen resolution and keep a page preview for navigation. */
@@ -101,6 +117,7 @@ export function useInkLayer({
   lasso,
   neighbors,
   center,
+  shouldPausePreview,
 }: {
   page: Page;
   viewport: RefObject<HTMLDivElement | null>;
@@ -114,6 +131,7 @@ export function useInkLayer({
   lasso: Point[];
   neighbors: StackPage[];
   center: number;
+  shouldPausePreview: () => boolean;
 }) {
   const inkCanvas = useRef<HTMLCanvasElement>(null);
   const draftCanvas = useRef<HTMLCanvasElement>(null);
@@ -130,6 +148,11 @@ export function useInkLayer({
   const draft = useRef<Stroke | null>(null);
   const draftFrame = useRef<number | null>(null);
   const draftArea = useRef<InkBounds | null>(null);
+  const draftPaint = useRef<{
+    stroke: Stroke;
+    geometry: InkGeometry;
+    shape: ReturnType<typeof strokeShape>;
+  } | null>(null);
   const lassoVisible = useRef(false);
   const eraseFrame = useRef<number | null>(null);
   const erasing = useRef<{ points: Point[]; width: number; painted: number } | null>(null);
@@ -145,6 +168,7 @@ export function useInkLayer({
     if (draftFrame.current !== null) cancelAnimationFrame(draftFrame.current);
     draftFrame.current = null;
     draft.current = null;
+    draftPaint.current = null;
     const area = draftArea.current;
     if (area) {
       draftCanvas.current
@@ -160,17 +184,26 @@ export function useInkLayer({
     const canvas = draftCanvas.current;
     if (!canvas || !stroke || !geometry || interacting.current) return;
     const ctx = canvas.getContext('2d')!;
+    const shape = strokeShape(stroke);
+    const last = draftPaint.current;
+    const sameView = last?.stroke === stroke && last.geometry === geometry;
+    const box = sameView ? changedStrokeBounds(last.shape, shape, stroke) : shape.bounds;
+    if (!box) return;
     const previous = draftArea.current;
-    if (previous)
+    if (!sameView && previous)
       ctx.clearRect(
         previous.left,
         previous.top,
         previous.right - previous.left,
         previous.bottom - previous.top,
       );
-    const bounds = pixelBounds(geometry, strokeBounds(stroke, true));
+    const bounds = pixelBounds(geometry, shape.bounds);
     draftArea.current = bounds.right > bounds.left && bounds.bottom > bounds.top ? bounds : null;
-    if (draftArea.current) inPage(ctx, geometry, () => drawStrokes(ctx, [stroke], true));
+    draftPaint.current = { stroke, geometry, shape };
+    const damage = pixelBounds(geometry, box);
+    if (damage.right <= damage.left || damage.bottom <= damage.top) return;
+    ctx.clearRect(damage.left, damage.top, damage.right - damage.left, damage.bottom - damage.top);
+    inPixels(ctx, damage, () => inPage(ctx, geometry, () => drawStrokes(ctx, [stroke])));
   }, [interacting]);
   const previewStroke = (stroke: Stroke) => {
     draft.current = stroke;
@@ -242,6 +275,7 @@ export function useInkLayer({
       if (overlay.width !== geometry.width) overlay.width = geometry.width;
       if (overlay.height !== geometry.height) overlay.height = geometry.height;
       draftArea.current = null;
+      draftPaint.current = null;
     }
     const last = lastRaster.current;
     const old = rasterGeometry.current;
@@ -274,7 +308,7 @@ export function useInkLayer({
       return;
     }
     const ctx = clearCanvas(canvas, geometry.width, geometry.height);
-    inPage(ctx, geometry, () => drawStrokes(ctx, strokes));
+    inPage(ctx, geometry, () => drawStrokes(ctx, visibleStrokes(geometry, strokes)));
     for (const { page: neighbor, fit: neighborFit, top } of otherPages) {
       if (!neighbor.strokes.length) continue;
       const scale = neighborFit * zoom * ratio;
@@ -287,10 +321,16 @@ export function useInkLayer({
         y + neighbor.height * scale <= 0
       )
         continue;
-      inPage(
-        ctx,
-        { ...geometry, scale, x, y, pageWidth: neighbor.width, pageHeight: neighbor.height },
-        () => drawStrokes(ctx, neighbor.strokes),
+      const neighborGeometry = {
+        ...geometry,
+        scale,
+        x,
+        y,
+        pageWidth: neighbor.width,
+        pageHeight: neighbor.height,
+      };
+      inPage(ctx, neighborGeometry, () =>
+        drawStrokes(ctx, visibleStrokes(neighborGeometry, neighbor.strokes)),
       );
     }
     if (erasing.current) {
@@ -322,8 +362,9 @@ export function useInkLayer({
     pan.y,
   ]);
 
-  useLayoutEffect(() => {
-    const canvas = inkPreview.current!;
+  const prepareInkPreview = useCallback(() => {
+    const canvas = inkPreview.current;
+    if (!canvas) return;
     const scale = Math.min(fit * (devicePixelRatio || 1), 2048 / Math.max(pageWidth, pageHeight));
     const width = saved.length ? Math.max(1, Math.round(pageWidth * scale)) : 1;
     const height = saved.length ? Math.max(1, Math.round(pageHeight * scale)) : 1;
@@ -342,6 +383,15 @@ export function useInkLayer({
       inPage(ctx, geometry, () => drawStrokes(ctx, saved));
     }
   }, [id, saved, fit, pageWidth, pageHeight]);
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout>;
+    const refresh = () => {
+      if (shouldPausePreview()) timer = setTimeout(refresh, 90);
+      else prepareInkPreview();
+    };
+    timer = setTimeout(refresh, 90);
+    return () => clearTimeout(timer);
+  }, [prepareInkPreview, shouldPausePreview]);
 
   useLayoutEffect(() => {
     const geometry = rasterGeometry.current;
@@ -383,6 +433,7 @@ export function useInkLayer({
     inkCanvas,
     draftCanvas,
     inkPreview,
+    prepareInkPreview,
     previewStroke,
     clearDraft,
     previewErasure,

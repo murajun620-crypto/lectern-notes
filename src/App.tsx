@@ -50,7 +50,7 @@ import {
 } from './storage';
 import { demoFile, exportPdf, importPdf, releasePdfs, renderPage } from './pdf';
 import Stage from './Stage';
-import { highlighterWidths, loadInputPreferences, penWidths } from './input';
+import { createInkPriority, highlighterWidths, loadInputPreferences, penWidths } from './input';
 import type { PencilTool } from './input';
 import { initialVideoRect } from './video-layout';
 import { PlaybackButtons } from './VideoBox';
@@ -118,7 +118,13 @@ function Modal({
     </dialog>
   );
 }
-const Thumbnail = memo(function Thumbnail({ page }: { page: Page }) {
+const Thumbnail = memo(function Thumbnail({
+  page,
+  shouldPause,
+}: {
+  page: Page;
+  shouldPause?: () => boolean;
+}) {
   const ref = useRef<HTMLCanvasElement>(null);
   const [background, setBackground] = useState<HTMLCanvasElement | null>(null);
   const { width, height, sourcePage, assetId, strokes } = page;
@@ -131,7 +137,14 @@ const Thumbnail = memo(function Thumbnail({ page }: { page: Page }) {
       if (!entries[0].isIntersecting) return;
       observer.disconnect();
       const temp = document.createElement('canvas');
-      void renderPage({ width, height, sourcePage, assetId }, temp, scale, abort.signal)
+      void renderPage(
+        { width, height, sourcePage, assetId },
+        temp,
+        scale,
+        abort.signal,
+        undefined,
+        shouldPause,
+      )
         .then(() => {
           if (!abort.signal.aborted) setBackground(temp);
         })
@@ -142,11 +155,19 @@ const Thumbnail = memo(function Thumbnail({ page }: { page: Page }) {
       abort.abort();
       observer.disconnect();
     };
-  }, [width, height, sourcePage, assetId, scale]);
+  }, [width, height, sourcePage, assetId, scale, shouldPause]);
   useEffect(() => {
     const canvas = ref.current!;
     if (!background) return;
-    const frame = requestAnimationFrame(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let frame: number;
+    const paint = () => {
+      if (shouldPause?.()) {
+        timer = setTimeout(() => {
+          frame = requestAnimationFrame(paint);
+        }, 95);
+        return;
+      }
       if (canvas.width !== background.width) canvas.width = background.width;
       if (canvas.height !== background.height) canvas.height = background.height;
       const ctx = canvas.getContext('2d')!;
@@ -156,9 +177,13 @@ const Thumbnail = memo(function Thumbnail({ page }: { page: Page }) {
       ctx.scale(scale, scale);
       drawStrokes(ctx, strokes);
       ctx.restore();
-    });
-    return () => cancelAnimationFrame(frame);
-  }, [background, scale, strokes]);
+    };
+    frame = requestAnimationFrame(paint);
+    return () => {
+      clearTimeout(timer);
+      cancelAnimationFrame(frame);
+    };
+  }, [background, scale, strokes, shouldPause]);
   return <canvas ref={ref} style={{ aspectRatio: `${page.width}/${page.height}` }} />;
 });
 const tools: { id: Tool; label: string; icon: ReactNode; key: string }[] = [
@@ -191,6 +216,7 @@ export default function App() {
     [project, setProject] = useState<Project | null>(null),
     [initialized, setInitialized] = useState(false);
   const [inkClipboard, setInkClipboard] = useState<Stroke[]>([]);
+  const [inkPriority] = useState(createInkPriority);
   const [tool, setTool] = useState<Tool>('pen'),
     [colorChoices, setColorChoices] = useState<Record<WritingTool, number | string>>({
       pen: 0,
@@ -321,9 +347,13 @@ export default function App() {
   useEffect(() => {
     if (!project) return;
     setSaved(false);
-    saveTimer.current = setTimeout(() => void persist(project).catch(() => {}), 300);
+    const autosave = () => {
+      if (inkPriority.isBusy()) saveTimer.current = setTimeout(autosave, 100);
+      else void persist(project).catch(() => {});
+    };
+    saveTimer.current = setTimeout(autosave, 300);
     return () => clearTimeout(saveTimer.current);
-  }, [project, persist]);
+  }, [project, persist, inkPriority]);
   useEffect(() => {
     const flush = () => {
       if (document.visibilityState === 'hidden' && current.current) {
@@ -1111,7 +1141,7 @@ export default function App() {
                         aria-current={i === project.currentPage ? 'page' : undefined}
                         onClick={() => update((p) => ({ ...p, currentPage: i }))}
                       >
-                        <Thumbnail page={pg} />
+                        <Thumbnail page={pg} shouldPause={inkPriority.isBusy} />
                         <span>
                           {String(i + 1).padStart(2, '0')}
                           {pg.videos.length > 0 && <Video size={12} />}
@@ -1174,6 +1204,7 @@ export default function App() {
                   zoom={zoom}
                   setZoom={setZoom}
                   inkClipboard={inkClipboard}
+                  inkPriority={inkPriority}
                   onCopyInk={setInkClipboard}
                   onChange={changePage}
                   onNavigate={navigate}

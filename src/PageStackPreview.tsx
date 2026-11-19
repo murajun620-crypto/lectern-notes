@@ -8,20 +8,30 @@ export default memo(function PageStackPreview({
   page,
   fit,
   active,
+  shouldPause,
 }: {
   page: Page;
   fit: number;
   active: boolean;
+  shouldPause: () => boolean;
 }) {
   const pdf = useRef<HTMLCanvasElement>(null);
   const ink = useRef<HTMLCanvasElement>(null);
   const { id, width, height, sourcePage, assetId, strokes } = page;
   const scale = Math.min(fit * (devicePixelRatio || 1), 1200 / Math.max(width, height));
   useEffect(() => {
+    if (active) return;
     const canvas = pdf.current!;
     const temp = document.createElement('canvas');
     const abort = new AbortController();
-    void renderPage({ width, height, sourcePage, assetId }, temp, scale, abort.signal)
+    void renderPage(
+      { width, height, sourcePage, assetId },
+      temp,
+      scale,
+      abort.signal,
+      undefined,
+      shouldPause,
+    )
       .then(() => {
         if (abort.signal.aborted) return;
         canvas.width = temp.width;
@@ -35,7 +45,7 @@ export default memo(function PageStackPreview({
         temp.width = temp.height = 1;
       });
     return () => abort.abort();
-  }, [id, width, height, sourcePage, assetId, scale]);
+  }, [id, width, height, sourcePage, assetId, scale, active, shouldPause]);
 
   useLayoutEffect(() => {
     const canvas = ink.current!;

@@ -289,6 +289,70 @@ test('Pencil writes in hand mode, a resting palm stays blocked, and two-finger t
   await expect(page.getByLabel('ページ番号')).toHaveValue('2');
 });
 
+test('Pencil paint takes priority over PDF refresh and lift-off cannot extend the stroke', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1024, height: 768 });
+  await demo(page);
+  await page.evaluate(() => {
+    HTMLElement.prototype.setPointerCapture = () => {};
+    const clear = CanvasRenderingContext2D.prototype.clearRect;
+    CanvasRenderingContext2D.prototype.clearRect = function (x, y, width, height) {
+      if (this.canvas.classList.contains('ink-draft-canvas'))
+        this.canvas.dataset.clearWidth = String(width);
+      clear.call(this, x, y, width, height);
+    };
+  });
+  const stage = (await page.getByTestId('stage').boundingBox())!;
+  const start = stage.x + stage.width / 2 - 155;
+  const y = stage.y + stage.height / 2;
+  await page.getByLabel('表示倍率').selectOption('2');
+  await pointer(page, 'pointerdown', 41, 'pen', start, y, { pressure: 0.06 });
+  for (let i = 1; i <= 10; i++)
+    await pointer(page, 'pointermove', 41, 'pen', start + i * 15, y, { pressure: 0.06 });
+  const draft = page.locator('.ink-draft-canvas');
+  await expect(draft).toHaveAttribute('data-clear-width');
+  await page.waitForTimeout(450);
+  await expect(page.locator('.pdf-detail-layer canvas')).toHaveCount(0);
+  await draft.evaluate((canvas) => canvas.removeAttribute('data-clear-width'));
+  const end = start + 170;
+  await pointer(page, 'pointermove', 41, 'pen', end, y, { pressure: 0.06 });
+  await expect
+    .poll(async () => Number(await draft.getAttribute('data-clear-width')))
+    .toBeGreaterThan(0);
+  expect(Number(await draft.getAttribute('data-clear-width'))).toBeLessThan(90);
+  const readInk = (selector: string) =>
+    page.locator(selector).evaluate(
+      (c: HTMLCanvasElement, pos) => {
+        const r = c.getBoundingClientRect();
+        const image = c
+          .getContext('2d')!
+          .getImageData(Math.floor(pos.start - r.x - 10), Math.floor(pos.y - r.y - 12), 205, 105);
+        return Array.from({ length: image.width * image.height }, (_, i) => image.data[i * 4 + 3]);
+      },
+      { start, y },
+    );
+  const live = await readInk('.ink-draft-canvas');
+  expect(live.reduce((sum, alpha) => sum + alpha, 0)).toBeGreaterThan(5000);
+  await pointer(page, 'pointermove', 41, 'pen', end + 45, y + 60, { buttons: 0, pressure: 0 });
+  await pointer(page, 'pointerup', 41, 'pen', end + 80, y + 85, { pressure: 0 });
+  // Raster clipping can round the alpha of edge pixels differently.
+  await expect
+    .poll(async () => {
+      const saved = await readInk('.ink-canvas');
+      return saved.reduce((sum, alpha, i) => sum + Math.abs(alpha - live[i]), 0);
+    })
+    .toBeLessThan(32);
+  await expect(page.locator('.pdf-detail-layer canvas')).toBeVisible();
+  const paper = (await page.getByTestId('pdf-page').boundingBox())!;
+  await expect
+    .poll(async () => {
+      const p = (await stored(page))[0].pages[0];
+      return (p.strokes[0]?.points.at(-1)?.x / p.width) * paper.width + paper.x;
+    })
+    .toBeCloseTo(end, 0);
+});
+
 test('light Pencil strokes stay continuous and ink history updates without repainting the whole page', async ({
   page,
 }) => {

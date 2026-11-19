@@ -7,9 +7,10 @@ import { renderPage } from './pdf';
 import VideoBox from './VideoBox';
 import type { RegisterLecturePlayback } from './VideoBox';
 import { effectiveTool, PalmGuard } from './input';
-import type { PencilTool } from './input';
-import { clampPageZoom, rasterScaleLimit, usePageViewport } from './usePageViewport';
+import type { InkPriority, PencilTool } from './input';
+import { clampPageZoom, usePageViewport } from './usePageViewport';
 import { useInkLayer } from './useInkLayer';
+import { usePdfDetail } from './usePdfDetail';
 import { usePageStack } from './usePageStack';
 import PageStackPreview from './PageStackPreview';
 import { applyErasure } from './eraser';
@@ -48,6 +49,7 @@ type Props = {
   fitWidth: boolean;
   zoom: number;
   inkClipboard: Stroke[];
+  inkPriority: InkPriority;
   onCopyInk: (strokes: Stroke[]) => void;
   setZoom: (z: number) => void;
   onChange: (page: Page) => void;
@@ -74,6 +76,7 @@ export default function Stage({
   fitWidth,
   zoom,
   inkClipboard,
+  inkPriority,
   onCopyInk,
   setZoom,
   onChange,
@@ -115,6 +118,7 @@ export default function Stage({
     original: Stroke[];
     pan: { x: number; y: number };
     points: Point[];
+    paperRect: DOMRect;
     stroke?: Stroke;
     selection: Set<string>;
     shape: InkSelection | null;
@@ -150,10 +154,13 @@ export default function Stage({
     cancelled: boolean;
   } | null>(null);
   const lasers = useRef<{ x: number; y: number; t: number }[]>([]);
+  const preparePreview = useRef<() => void>(() => {});
   const showInkPreview = useCallback(() => {
     const stage = viewport.current;
-    if (stage && !stage.hasAttribute('data-ink-preview'))
+    if (stage && !stage.hasAttribute('data-ink-preview')) {
+      preparePreview.current();
       stage.setAttribute('data-ink-preview', '');
+    }
   }, []);
   const stack = usePageStack(continuousPages, page, size, fitWidth, onFocusPage);
   const { fit, contentBounds, paintStack, settleStack, takePagePan } = stack;
@@ -164,7 +171,6 @@ export default function Stage({
     rasterScale,
     settled,
     showDetail,
-    clearDetail,
     limit,
     begin: beginView,
     move: moveView,
@@ -187,10 +193,26 @@ export default function Stage({
     settleStack,
     takePagePan,
   });
+  const pdfBusy = useCallback(
+    () => interacting.current || inkPriority.isBusy(),
+    [interacting, inkPriority],
+  );
+  usePdfDetail({
+    page,
+    fit,
+    zoom,
+    pan,
+    size,
+    baseScale: rasterScale,
+    view,
+    isBusy: pdfBusy,
+    showDetail,
+  });
   const {
     inkCanvas,
     draftCanvas,
     inkPreview,
+    prepareInkPreview,
     previewStroke,
     clearDraft,
     previewErasure,
@@ -208,16 +230,21 @@ export default function Stage({
     lasso,
     neighbors: stack.nearby,
     center: stack.active?.center ?? 0,
+    shouldPausePreview: inkPriority.isBusy,
   });
+  preparePreview.current = prepareInkPreview;
   const clearInkGesture = useCallback(() => {
+    inkPriority.end();
     clearDraft();
     finishErasure();
     setSelectionPreview(null);
     setLasso([]);
-  }, [clearDraft, finishErasure]);
+  }, [inkPriority, clearDraft, finishErasure]);
+  useEffect(() => inkPriority.end, [inkPriority]);
   const screenScale = () => fit * view.current.zoom;
   const hideEraser = () => {
-    if (eraserCursor.current) eraserCursor.current.style.display = 'none';
+    const cursor = eraserCursor.current;
+    if (cursor && cursor.style.display !== 'none') cursor.style.display = 'none';
   };
   const showEraser = (e: { clientX: number; clientY: number; pointerType: string }) => {
     const el = eraserCursor.current!;
@@ -286,10 +313,10 @@ export default function Stage({
     const abort = new AbortController();
     if (pdfCanvas.current?.dataset.page !== page.id) setLoading(true);
     const target = pdfCanvas.current!;
-    // Render offscreen to prevent overlapping PDF.js jobs during zoom/page changes.
+    // Keep the fit-size backing bitmap across zoom and pan.
     const temp = document.createElement('canvas');
     const output = rasterScale;
-    void renderPage(page, temp, output, abort.signal)
+    void renderPage(page, temp, output, abort.signal, undefined, pdfBusy)
       .then(() => {
         if (cancelled) return;
         target.width = temp.width;
@@ -311,87 +338,15 @@ export default function Stage({
       cancelled = true;
       abort.abort();
     };
-  }, [page.id, page.assetId, page.sourcePage, page.width, page.height, rasterScale, onError]);
-  const { id: pageId, assetId, sourcePage, width: pageWidth, height: pageHeight } = page;
-  useEffect(() => {
-    const deviceScale = devicePixelRatio || 1;
-    const displayScale = fit * zoom;
-    const pageFitsAtNativeResolution =
-      deviceScale <= 2 && displayScale * deviceScale <= rasterScaleLimit(pageWidth, pageHeight);
-    if (!assetId || (zoom === 1 && pageFitsAtNativeResolution)) {
-      clearDetail();
-      return;
-    }
-    const abort = new AbortController();
-    const timer = setTimeout(() => {
-      if (interacting.current) return;
-      const originX = (size.w - pageWidth * displayScale) / 2 + pan.x;
-      const originY = (size.h - pageHeight * displayScale) / 2 + pan.y;
-      const left = Math.max(0, originX);
-      const top = Math.max(0, originY);
-      const visibleWidth = Math.min(size.w, originX + pageWidth * displayScale) - left;
-      const visibleHeight = Math.min(size.h, originY + pageHeight * displayScale) - top;
-      if (visibleWidth <= 0 || visibleHeight <= 0) return;
-      const outputScale = Math.min(deviceScale, rasterScaleLimit(visibleWidth, visibleHeight));
-      const canvas = document.createElement('canvas');
-      let published = false;
-      canvas.style.left = `${left}px`;
-      canvas.style.top = `${top}px`;
-      canvas.style.width = `${visibleWidth}px`;
-      canvas.style.height = `${visibleHeight}px`;
-      const region = {
-        width: Math.max(1, Math.round(visibleWidth * outputScale)),
-        height: Math.max(1, Math.round(visibleHeight * outputScale)),
-        offsetX: (originX - left) * outputScale,
-        offsetY: (originY - top) * outputScale,
-      };
-      void renderPage(
-        { assetId, sourcePage, width: pageWidth, height: pageHeight },
-        canvas,
-        displayScale * outputScale,
-        abort.signal,
-        region,
-      )
-        .then(() => {
-          const current = view.current;
-          if (
-            !abort.signal.aborted &&
-            !interacting.current &&
-            current.zoom === zoom &&
-            current.pan.x === pan.x &&
-            current.pan.y === pan.y
-          ) {
-            showDetail(canvas);
-            published = true;
-          }
-        })
-        // The full-page bitmap stays visible if the device cannot render the detail layer.
-        .catch(() => {})
-        .finally(() => {
-          if (!published) canvas.width = canvas.height = 1;
-        });
-    }, 140);
-    return () => {
-      clearTimeout(timer);
-      abort.abort();
-    };
   }, [
-    pageId,
-    assetId,
-    sourcePage,
-    pageWidth,
-    pageHeight,
-    fit,
-    zoom,
-    size.w,
-    size.h,
-    pan.x,
-    pan.y,
-    settled,
-    interacting,
-    view,
-    clearDetail,
-    showDetail,
+    page.id,
+    page.assetId,
+    page.sourcePage,
+    page.width,
+    page.height,
+    rasterScale,
+    onError,
+    pdfBusy,
   ]);
   useEffect(() => {
     let frame: number;
@@ -441,11 +396,13 @@ export default function Stage({
       p: e.pointerType === 'pen' ? (e.pressure ?? 0.5) : 0.5,
     };
   };
-  const appendSamples = (e: ReactPointerEvent, points: Point[]) => {
-    const rect = paper.current!.getBoundingClientRect();
+  const appendSamples = (e: ReactPointerEvent, g: NonNullable<typeof gesture.current>) => {
+    const { points, paperRect } = g;
     const samples = e.nativeEvent.getCoalescedEvents?.();
     const spacing = 0.25 / screenScale();
-    for (const sample of samples?.length ? samples : [e.nativeEvent]) {
+    const append = (sample: PointerEvent) => {
+      if (g.kind === 'draw' && e.pointerType === 'pen' && !sample.buttons && !sample.pressure)
+        return;
       const p = point(
         {
           clientX: sample.clientX,
@@ -453,11 +410,13 @@ export default function Stage({
           pressure: sample.pressure,
           pointerType: e.pointerType,
         },
-        rect,
+        paperRect,
       );
       const last = points.at(-1)!;
       if (Math.hypot(p.x - last.x, p.y - last.y) > spacing) points.push(p);
-    }
+    };
+    samples?.forEach(append);
+    append(e.nativeEvent);
   };
   const removeSelection = () => {
     if (!selected.length) return;
@@ -644,7 +603,8 @@ export default function Stage({
       pinch.current = null;
     }
     if (gesture.current) return;
-    const p = point(e);
+    const paperRect = paper.current!.getBoundingClientRect();
+    const p = point(e, paperRect);
     const selectedTool = effectiveTool(tool, pencilTool, e.pointerType, fingerInk);
     const resize = !!(e.target as Element).closest('[data-ink-resize]');
     const inSelection =
@@ -674,10 +634,12 @@ export default function Stage({
       pan,
       original: page.strokes,
       points: [p],
+      paperRect,
       selection: selectionIds,
       shape: selectionShape,
     };
     if (kind === 'draw') {
+      inkPriority.begin();
       const s: Stroke = {
         id: uid(),
         tool: selectedTool as 'pen' | 'highlighter',
@@ -689,6 +651,7 @@ export default function Stage({
       previewStroke(s);
     }
     if (kind === 'erase') {
+      inkPriority.begin();
       gesture.current.erasure = { id: uid(), width: eraserWidth / screenScale() };
       previewErasure(gesture.current.points, gesture.current.erasure.width);
     }
@@ -764,11 +727,11 @@ export default function Stage({
     }
     if (g.kind === 'draw') {
       const before = g.points.length;
-      appendSamples(e, g.points);
+      appendSamples(e, g);
       if (g.points.length > before) previewStroke(g.stroke!);
     }
     if (g.kind === 'erase') {
-      appendSamples(e, g.points);
+      appendSamples(e, g);
       previewErasure(g.points, g.erasure!.width);
     }
     if (g.kind === 'lasso') {
@@ -805,12 +768,7 @@ export default function Stage({
     gesture.current = null;
     if (g.kind === 'pan' && interacting.current) commitView();
     if (g.kind === 'draw' && (!cancel || (g.pointerType === 'pen' && g.points.length > 1))) {
-      if (!cancel) {
-        const p = point(e);
-        const last = g.points.at(-1)!;
-        if (Math.hypot(p.x - last.x, p.y - last.y) > 0.25 / screenScale())
-          g.points.push({ ...p, p: e.pressure > 0 ? p.p : last.p });
-      }
+      // Lift-off coordinates can already belong to hover or the next stroke.
       onChange({
         ...pageRef.current,
         strokes: [...pageRef.current.strokes, g.stroke!],
@@ -1196,7 +1154,12 @@ export default function Stage({
                 height: item.page.height * item.fit,
               }}
             >
-              <PageStackPreview page={item.page} fit={item.fit} active={item.page.id === page.id} />
+              <PageStackPreview
+                page={item.page}
+                fit={item.fit}
+                active={item.page.id === page.id}
+                shouldPause={pdfBusy}
+              />
             </div>
           ))}
         </div>

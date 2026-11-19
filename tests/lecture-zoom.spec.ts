@@ -156,7 +156,7 @@ test('lecture has highlighter, no document header, and an independent persistent
   await expect(page.getByLabel('レーザーの太さ', { exact: true })).toHaveValue('12');
 });
 
-test('pinch scales cached layers without raster resizing or a loading overlay, then sharpens once', async ({
+test('pinch reuses the backing bitmap and sharpens the visible region after release', async ({
   page,
 }) => {
   await demo(page);
@@ -209,17 +209,16 @@ test('pinch scales cached layers without raster resizing or a loading overlay, t
   await expect
     .poll(async () => Number(await page.getByLabel('表示倍率').inputValue()))
     .toBeCloseTo(2.2, 1);
-  await expect
-    .poll(() => page.locator('.pdf-canvas').evaluate((c: HTMLCanvasElement) => c.width))
-    .toBeGreaterThan(initial.w * 1.8);
-  expect(await page.evaluate(() => (window as any).__rasterChanges.length)).toBe(2);
+  await expect(page.locator('.pdf-detail-layer canvas')).toBeVisible();
+  expect(await page.evaluate(() => (window as any).__rasterChanges)).toEqual([]);
   await expect(page.getByTestId('ink-canvas')).toBeVisible();
   await expect(page.locator('.ink-page-preview')).toBeHidden();
   await expect(page.locator('.pdf-loading')).toHaveCount(0);
-  const sharp = await page.locator('.pdf-canvas').evaluate((c: HTMLCanvasElement) => c.width);
   await page.getByLabel('表示倍率').selectOption('1');
   await page.getByLabel('表示倍率').selectOption('2');
-  expect(await page.locator('.pdf-canvas').evaluate((c: HTMLCanvasElement) => c.width)).toBe(sharp);
+  expect(await page.locator('.pdf-canvas').evaluate((c: HTMLCanvasElement) => c.width)).toBe(
+    initial.w,
+  );
   const r = (await page.getByTestId('pdf-page').boundingBox())!;
   await page.mouse.move(r.x + r.width * 0.3, r.y + r.height * 0.4);
   await page.mouse.down();
@@ -304,19 +303,32 @@ test.describe('high-DPI PDF detail rendering', () => {
     const samples = () =>
       detail.evaluate((canvas: HTMLCanvasElement) => {
         const ctx = canvas.getContext('2d')!;
-        return [0.25, 0.75].map((fraction) =>
-          Array.from(
-            ctx.getImageData(Math.floor(canvas.width * fraction), canvas.height >> 1, 1, 1).data,
-          ),
+        const viewport = canvas.closest('[data-testid="stage"]')!.getBoundingClientRect();
+        const box = canvas.getBoundingClientRect();
+        const y = Math.floor(
+          ((viewport.top + viewport.height / 2 - box.top) * canvas.height) / box.height,
         );
+        return [0.25, 0.75].map((fraction) => {
+          const x = Math.floor(
+            ((viewport.left + viewport.width * fraction - box.left) * canvas.width) / box.width,
+          );
+          return Array.from(ctx.getImageData(x, y, 1, 1).data);
+        });
       });
     await expect(detail).toBeVisible();
-    const pixels = await detail.evaluate((canvas: HTMLCanvasElement) => ({
-      width: canvas.width,
-      height: canvas.height,
-    }));
-    expect(pixels.width).toBeCloseTo(stage.width * 2, 0);
-    expect(pixels.height).toBeCloseTo(stage.height * 2, 0);
+    const pixels = await detail.evaluate((canvas: HTMLCanvasElement) => {
+      const box = canvas.getBoundingClientRect();
+      return {
+        width: canvas.width,
+        height: canvas.height,
+        cssWidth: box.width,
+        cssHeight: box.height,
+      };
+    });
+    expect(pixels.width).toBeCloseTo(pixels.cssWidth * 2, 0);
+    expect(pixels.height).toBeCloseTo(pixels.cssHeight * 2, 0);
+    expect(pixels.width).toBeGreaterThanOrEqual(stage.width * 2);
+    expect(pixels.height).toBeGreaterThanOrEqual(stage.height * 2);
     const previewWidth = await page
       .locator('.pdf-canvas')
       .evaluate((canvas: HTMLCanvasElement) => canvas.width);
@@ -330,6 +342,18 @@ test.describe('high-DPI PDF detail rendering', () => {
     await detail.evaluate((canvas) => canvas.setAttribute('data-test-old-detail', ''));
     await page.getByRole('button', { name: '移動', exact: true }).click();
     const y = stage.y + stage.height * 0.5;
+    const x = stage.x + stage.width * 0.2;
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(x + 32, y, { steps: 4 });
+    await page.mouse.up();
+    // Observe longer than the redraw debounce to check that nearby pixels are reused.
+    await page.waitForTimeout(450);
+    await expect(detail).toHaveAttribute('data-test-old-detail', '');
+    expect(await samples()).toEqual([
+      [255, 0, 0, 255],
+      [0, 0, 255, 255],
+    ]);
     await page.mouse.move(stage.x + stage.width * 0.2, y);
     await page.mouse.down();
     await page.mouse.move(stage.x + stage.width * 0.8, y, { steps: 8 });

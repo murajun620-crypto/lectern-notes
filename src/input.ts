@@ -1,5 +1,23 @@
 import type { Tool } from './model';
 
+/** Leave a short window between letters for the next stroke to take priority. */
+export function createInkPriority() {
+  let active = false;
+  let resumeAt = 0;
+  return {
+    begin: () => {
+      active = true;
+    },
+    end: () => {
+      if (!active) return;
+      active = false;
+      resumeAt = performance.now() + 140;
+    },
+    isBusy: () => active || performance.now() < resumeAt,
+  };
+}
+export type InkPriority = ReturnType<typeof createInkPriority>;
+
 export type PencilTool = Exclude<Tool, 'hand'>;
 export const penWidths = [1, 2.5, 4, 7, 10];
 export const highlighterWidths = [5, 12.5, 20, 35, 50];

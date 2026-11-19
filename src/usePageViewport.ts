@@ -64,13 +64,10 @@ export function usePageViewport({
     frame = useRef<number | null>(null),
     idle = useRef<ReturnType<typeof setTimeout> | undefined>(undefined),
     previousPage = useRef(pageId);
-  const rasterFor = useCallback(
-    (z: number) =>
-      Math.min(fit * z * Math.min(devicePixelRatio || 1, 2), rasterScaleLimit(width, height)),
-    [fit, width, height],
+  const rasterScale = Math.min(
+    fit * Math.min(devicePixelRatio || 1, 2),
+    rasterScaleLimit(width, height),
   );
-  const [raster, setRaster] = useState({ pageId, scale: rasterFor(zoom) });
-  const rasterScale = raster.pageId === pageId ? raster.scale : rasterFor(zoom);
   const limit = useCallback(
     (next: Offset, z = view.current.zoom): Offset => ({
       x: clamp(
@@ -104,18 +101,13 @@ export function usePageViewport({
     const layer = detail.current,
       previous = detailView.current;
     if (!layer || !previous) return;
-    if (
-      previous.pageId !== pageId ||
-      previous.fit !== fit ||
-      previous.w !== size.w ||
-      previous.h !== size.h
-    ) {
+    if (previous.pageId !== pageId) {
       layer.style.visibility = 'hidden';
       return;
     }
-    const ratio = current.zoom / previous.view.zoom;
-    const x = size.w / 2 + current.pan.x - (size.w / 2 + previous.view.pan.x) * ratio;
-    const y = size.h / 2 + current.pan.y - (size.h / 2 + previous.view.pan.y) * ratio;
+    const ratio = (fit * current.zoom) / (previous.fit * previous.view.zoom);
+    const x = size.w / 2 + current.pan.x - (previous.w / 2 + previous.view.pan.x) * ratio;
+    const y = size.h / 2 + current.pan.y - (previous.h / 2 + previous.view.pan.y) * ratio;
     layer.style.visibility = 'visible';
     layer.style.transform =
       ratio === 1 && x === 0 && y === 0 ? '' : `translate3d(${x}px, ${y}px, 0) scale(${ratio})`;
@@ -165,11 +157,13 @@ export function usePageViewport({
     frame.current = null;
     paint();
     const current = view.current;
-    setPan({ ...current.pan });
+    setPan((previous) =>
+      previous.x === current.pan.x && previous.y === current.pan.y ? previous : current.pan,
+    );
     setZoom(current.zoom);
-    setSettled((v) => v + 1);
     if (moved.current) {
       moved.current = false;
+      setSettled((v) => v + 1);
       settleStack(current);
     }
   }, [paint, setZoom, settleStack]);
@@ -198,23 +192,6 @@ export function usePageViewport({
     }
     paint();
   }, [pageId, zoom, limit, paint, clearDetail, takePagePan]);
-  useEffect(() => {
-    const desired = rasterFor(zoom);
-    if (raster.pageId !== pageId) {
-      setRaster({ pageId, scale: desired });
-      return;
-    }
-    const timer = setTimeout(() => {
-      if (interacting.current) return;
-      // Reuse the sharper bitmap when zooming out or making tiny adjustments.
-      setRaster((current) =>
-        current.pageId === pageId && desired <= current.scale * 1.1
-          ? current
-          : { pageId, scale: desired },
-      );
-    }, 140);
-    return () => clearTimeout(timer);
-  }, [pageId, zoom, rasterFor, settled, raster.pageId]);
   useEffect(
     () => () => {
       if (frame.current !== null) cancelAnimationFrame(frame.current);
@@ -229,7 +206,6 @@ export function usePageViewport({
     rasterScale,
     settled,
     showDetail,
-    clearDetail,
     limit,
     begin,
     move,

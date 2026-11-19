@@ -70,6 +70,7 @@ export async function renderPage(
   scale: number,
   signal?: AbortSignal,
   region?: { width: number; height: number; offsetX: number; offsetY: number },
+  shouldPause?: () => boolean,
 ) {
   canvas.width = region?.width ?? Math.max(1, Math.round(page.width * scale));
   canvas.height = region?.height ?? Math.max(1, Math.round(page.height * scale));
@@ -84,11 +85,23 @@ export async function renderPage(
       viewport: pdfPage.getViewport({ scale }),
       transform: region ? [1, 0, 0, 1, region.offsetX, region.offsetY] : undefined,
     });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    if (shouldPause) {
+      task.onContinue = (resume: () => void) => {
+        const attempt = () => {
+          if (signal?.aborted) return;
+          if (shouldPause()) timer = setTimeout(attempt, 65);
+          else resume();
+        };
+        attempt();
+      };
+    }
     const cancel = () => task.cancel();
     signal?.addEventListener('abort', cancel, { once: true });
     try {
       await task.promise;
     } finally {
+      clearTimeout(timer);
       signal?.removeEventListener('abort', cancel);
     }
   }
