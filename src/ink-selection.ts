@@ -1,4 +1,11 @@
-import { clamp, pointErased, pointInPolygon, strokeBounds, strokeHit } from './model';
+import {
+  clamp,
+  pointErased,
+  pointInPolygon,
+  strokeBounds,
+  strokeCenterline,
+  strokeHit,
+} from './model';
 import type { Page, Point, Stroke } from './model';
 
 type Bounds = { left: number; top: number; right: number; bottom: number };
@@ -105,13 +112,13 @@ export function lassoStrokes(strokes: Stroke[], polygon: Point[]) {
     const { left, right, top, bottom } = strokeBounds(stroke);
     if (left > area.right || right < area.left || top > area.bottom || bottom < area.top)
       return false;
-    if (stroke.points.some((p) => pointInPolygon(p, polygon) && !pointErased(stroke, p)))
-      return true;
+    const points = strokeCenterline(stroke);
+    if (points.some((p) => pointInPolygon(p, polygon) && !pointErased(stroke, p))) return true;
     if (polygon.some((p) => strokeHit(stroke, p, 0))) return true;
     // A long, sparsely sampled stroke can cross the lasso even with both endpoints outside.
-    for (let i = 1; i < stroke.points.length; i++) {
-      const a = stroke.points[i - 1];
-      const b = stroke.points[i];
+    for (let i = 1; i < points.length; i++) {
+      const a = points[i - 1];
+      const b = points[i];
       const dx = b.x - a.x;
       const dy = b.y - a.y;
       for (let j = 0; j < polygon.length; j++) {

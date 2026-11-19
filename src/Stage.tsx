@@ -398,11 +398,13 @@ export default function Stage({
   };
   const appendSamples = (e: ReactPointerEvent, g: NonNullable<typeof gesture.current>) => {
     const { points, paperRect } = g;
-    const samples = e.nativeEvent.getCoalescedEvents?.();
+    const event = e.nativeEvent;
+    const samples = event.getCoalescedEvents?.();
     const spacing = 0.25 / screenScale();
-    const append = (sample: PointerEvent) => {
+    // The parent event summarizes the batch and may be behind its final contact point.
+    for (const sample of samples?.length ? samples : [event]) {
       if (g.kind === 'draw' && e.pointerType === 'pen' && !sample.buttons && !sample.pressure)
-        return;
+        continue;
       const p = point(
         {
           clientX: sample.clientX,
@@ -414,9 +416,7 @@ export default function Stage({
       );
       const last = points.at(-1)!;
       if (Math.hypot(p.x - last.x, p.y - last.y) > spacing) points.push(p);
-    };
-    samples?.forEach(append);
-    append(e.nativeEvent);
+    }
   };
   const removeSelection = () => {
     if (!selected.length) return;
@@ -816,7 +816,6 @@ export default function Stage({
           video={v}
           page={owner}
           selected={selectedVideo === key}
-          selectBeforePlaying={tool === 'hand'}
           onSelect={() => setSelectedVideo(key)}
           onDeselect={() => setSelectedVideo(null)}
           registerPlayback={registerPlayback}

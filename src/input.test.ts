@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { effectiveTool, PalmGuard } from './input';
 import { enlargedVideoRect, initialVideoRect, playerViewport, resizeVideo } from './video-layout';
-import { penOutline, drawLaser } from './model';
+import { penOutline, drawLaser, strokeCenterline } from './model';
 describe('automatic Pencil and finger routing', () => {
   it('keeps the last Pencil tool while hand mode remains available to mouse', () => {
     expect(effectiveTool('hand', 'pen', 'pen', false)).toBe('pen');
@@ -112,6 +112,27 @@ describe('smooth pressure-bearing stroke outline', () => {
     };
     expect(extent(0.001)).toBeGreaterThan(stroke.width * 0.72);
     expect(extent(0.85)).toBeGreaterThan(extent(0.1));
+  });
+  it('interpolates sparse pen curves inside the contact span and preserves pressure and corners', () => {
+    const points = [
+      { x: 0, y: 0, p: 0.12 },
+      { x: 14, y: 10, p: 0.25 },
+      { x: 30, y: 17, p: 0.5 },
+      { x: 50, y: 20, p: 0.8 },
+    ];
+    const curved = strokeCenterline({ ...stroke, width: 1, points });
+    expect(curved.length).toBeGreaterThan(points.length);
+    expect(curved[0]).toBe(points[0]);
+    expect(curved.at(-1)).toBe(points.at(-1));
+    for (let i = 1; i < points.length; i++) {
+      const a = points[i - 1];
+      const b = points[i];
+      const span = curved.slice(curved.indexOf(a), curved.indexOf(b) + 1);
+      expect(span.every((p) => p.x >= a.x && p.x <= b.x && p.y >= a.y && p.y <= b.y)).toBe(true);
+      expect(span.every((p) => p.p >= a.p && p.p <= b.p)).toBe(true);
+    }
+    const corner = [points[0], { x: 30, y: 0, p: 0.3 }, { x: 30, y: 30, p: 0.6 }];
+    expect(strokeCenterline({ ...stroke, points: corner })).toBe(corner);
   });
 });
 describe('laser trail compositing', () => {

@@ -81,8 +81,9 @@ export function segmentDistance(p: Point, a: Point, b: Point) {
   return Math.hypot(p.x - a.x - t * dx, p.y - a.y - t * dy);
 }
 export function strokeHit(stroke: Stroke, point: Point, radius: number) {
-  return stroke.points.some((b, i) => {
-    const a = stroke.points[Math.max(0, i - 1)],
+  const points = strokeCenterline(stroke);
+  return points.some((b, i) => {
+    const a = points[Math.max(0, i - 1)],
       dx = b.x - a.x,
       dy = b.y - a.y;
     const t = clamp(((point.x - a.x) * dx + (point.y - a.y) * dy) / (dx * dx + dy * dy || 1), 0, 1);
@@ -118,9 +119,68 @@ export function pointErased(stroke: Stroke, p: Point) {
     ) ?? false
   );
 }
+function curveHandle(start: Point, end: Point, neighbor: Point | undefined, length: number) {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const nx = start.x - (neighbor?.x ?? start.x);
+  const ny = start.y - (neighbor?.y ?? start.y);
+  const distance = Math.hypot(nx, ny);
+  // Keep a sharp corner's tangent on its own segment.
+  if (nx * dx + ny * dy <= 0.5 * distance * length) {
+    return { x: start.x + dx / 3, y: start.y + dy / 3 };
+  }
+  const ratio = length / distance;
+  return {
+    x: clamp(start.x + (dx + nx * ratio) / 6, Math.min(start.x, end.x), Math.max(start.x, end.x)),
+    y: clamp(start.y + (dy + ny * ratio) / 6, Math.min(start.y, end.y), Math.max(start.y, end.y)),
+  };
+}
+
+const centerlines = new WeakMap<Stroke, { count: number; points: Point[] }>();
+/** Fill widely spaced curves between contacts while keeping the recorded samples intact. */
+export function strokeCenterline(stroke: Stroke): Point[] {
+  const { points, width } = stroke;
+  if (stroke.tool !== 'pen' || points.length < 3) return points;
+  const cached = centerlines.get(stroke);
+  if (cached?.count === points.length) return cached.points;
+  let interpolated: Point[] | undefined;
+  let remaining = 1024;
+  const step = Math.max(4, width);
+  for (let i = 1; i < points.length; i++) {
+    const a = points[i - 1];
+    const b = points[i];
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const length = Math.hypot(dx, dy);
+    const count = Math.min(8, remaining + 1, Math.ceil(length / step));
+    if (count > 1) {
+      const c = curveHandle(a, b, points[i - 2], length);
+      const d = curveHandle(b, a, points[i + 1], length);
+      const cross = (p: { x: number; y: number }) => dx * (p.y - a.y) - dy * (p.x - a.x);
+      if (Math.max(Math.abs(cross(c)), Math.abs(cross(d))) > 0.02 * length) {
+        interpolated ??= points.slice(0, i);
+        for (let j = 1; j < count; j++) {
+          const t = j / count;
+          const s = 1 - t;
+          interpolated.push({
+            x: s ** 3 * a.x + 3 * s * s * t * c.x + 3 * s * t * t * d.x + t ** 3 * b.x,
+            y: s ** 3 * a.y + 3 * s * s * t * c.y + 3 * s * t * t * d.y + t ** 3 * b.y,
+            p: a.p + t * (b.p - a.p),
+          });
+        }
+        remaining -= count - 1;
+      }
+    }
+    interpolated?.push(b);
+  }
+  const result = interpolated ?? points;
+  centerlines.set(stroke, { count: points.length, points: result });
+  return result;
+}
+
 export function penOutline(stroke: Stroke) {
   return getStroke(
-    stroke.points.map((p) => [p.x, p.y, Math.max(0.32, p.p)]),
+    strokeCenterline(stroke).map((p) => [p.x, p.y, Math.max(0.32, p.p)]),
     {
       size: stroke.width,
       thinning: 0.55,

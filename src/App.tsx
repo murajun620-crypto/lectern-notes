@@ -1349,8 +1349,8 @@ export default function App() {
             />
             {videoError && <p className="field-error">{videoError}</p>}
             <p className="form-note">
-              配置したサムネイルを選ぶと、移動・サイズ変更・折りたたみなどのボタンが出ます。中央の ▶
-              でページ内再生します。
+              サムネイルをタップすると、移動・サイズ変更・折りたたみなどのボタンが出ます。選択後、中央の
+              ▶ でページ内再生します。
             </p>
             <div className="modal-actions">
               <button type="button" className="secondary" onClick={() => setDialog(null)}>
@@ -1465,7 +1465,7 @@ export default function App() {
             </p>
             <h3>講義と画面ミラーリング</h3>
             <p>
-              「全画面表示」でPDFを広く表示しながら、同じ編集ツールを使えます。「資料メニュー」から書き出しや更新確認を開けます。動画の画像部分をタップすると配置メニュー、中央の再生ボタンを押すとページ内再生が開きます。AirPlay／HDMIで画面をミラーリングするとレーザーも反映されます。
+              「全画面表示」でPDFを広く表示しながら、同じ編集ツールを使えます。「資料メニュー」から書き出しや更新確認を開けます。動画はサムネイルをタップすると配置メニューが出ます。選択後の再生ボタンでページ内再生します。AirPlay／HDMIで画面をミラーリングするとレーザーも反映されます。
             </p>
             <p className="form-note">
               ショートカット：P ペン / M 蛍光ペン / E 消しゴム / S 選択 / L レーザー / H 移動 / ← →

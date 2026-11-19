@@ -74,7 +74,7 @@ async function mockYoutube(page: Page) {
   await page.route('https://www.youtube.com/iframe_api', (route) =>
     route.fulfill({
       contentType: 'application/javascript',
-      body: `window.YT={Player:class{constructor(el,o){this.iframe=document.createElement('iframe');this.iframe.src='about:blank';el.replaceWith(this.iframe);setTimeout(()=>o.events.onReady(),20);}playVideo(){}getIframe(){return this.iframe;}destroy(){this.iframe.remove();}}};window.onYouTubeIframeAPIReady();`,
+      body: `window.YT={Player:class{constructor(el,o){this.iframe=document.createElement('iframe');this.iframe.src='about:blank';el.replaceWith(this.iframe);setTimeout(()=>o.events.onReady(),20);this.iframe.addEventListener('mock-ended',()=>o.events.onStateChange({data:0}));}playVideo(){}getIframe(){return this.iframe;}destroy(){this.iframe.remove();}}};window.onYouTubeIframeAPIReady();`,
     }),
   );
 }
@@ -287,6 +287,111 @@ test('Pencil writes in hand mode, a resting palm stays blocked, and two-finger t
   await pointer(page, 'pointermove', 8, 'touch', a - 80, b);
   await pointer(page, 'pointerup', 8, 'touch', a - 80, b);
   await expect(page.getByLabel('ページ番号')).toHaveValue('2');
+});
+
+test.describe('Pencil contact samples', () => {
+  test.use({ viewport: { width: 1024, height: 768 }, deviceScaleFactor: 2 });
+
+  test('coalesced samples remain in order and produce a continuous light stroke', async ({
+    page,
+  }) => {
+    await demo(page);
+    await page.getByRole('button', { name: '白紙を追加', exact: true }).click();
+    await expect(page.getByLabel('ページ番号')).toHaveValue('2');
+    await page.getByLabel('ペンの太さ', { exact: true }).selectOption('1');
+    const stage = page.getByTestId('stage');
+    const rect = (await stage.boundingBox())!;
+    const x = Math.round(rect.x + rect.width / 2 - 105);
+    const y = rect.y + rect.height / 2 - 20;
+    await stage.evaluate(
+      async (el, pos) => {
+        HTMLElement.prototype.setPointerCapture = () => {};
+        const send = (
+          type: string,
+          dx: number,
+          dy: number,
+          samples?: { clientX: number; clientY: number; pressure: number; buttons: number }[],
+        ) => {
+          const event = new PointerEvent(type, {
+            bubbles: true,
+            pointerType: 'pen',
+            pointerId: 43,
+            isPrimary: true,
+            clientX: pos.x + dx,
+            clientY: pos.y + dy,
+            pressure: 0.07,
+            buttons: 1,
+          });
+          if (samples) Object.defineProperty(event, 'getCoalescedEvents', { value: () => samples });
+          el.dispatchEvent(event);
+        };
+        send('pointerdown', 0, 0);
+        const slope = 43 / 204;
+        for (let i = 1; i <= 12; i++) {
+          const dx = 17 * i;
+          send(
+            'pointermove',
+            dx - 4,
+            dx * slope - 0.8,
+            [dx - 8, dx].map((offset) => ({
+              clientX: pos.x + offset,
+              clientY: pos.y + offset * slope,
+              pressure: 0.07,
+              buttons: 1,
+            })),
+          );
+          await new Promise(requestAnimationFrame);
+        }
+        // Browsers without detailed samples still contribute the dispatched point.
+        send('pointermove', 218, 218 * slope, []);
+      },
+      { x, y },
+    );
+    const gaps = (selector: string) =>
+      page.locator(selector).evaluate(
+        (c: HTMLCanvasElement, pos) => {
+          const box = c.getBoundingClientRect();
+          const ratio = c.width / box.width;
+          const w = Math.round(185 * ratio);
+          const h = Math.round(58 * ratio);
+          const rgba = c
+            .getContext('2d')!
+            .getImageData(
+              Math.floor((pos.x + 10 - box.x) * ratio),
+              Math.floor((pos.y - 5 - box.y) * ratio),
+              w,
+              h,
+            ).data;
+          let empty = 0;
+          for (let i = 0; i < w; i++) {
+            let covered = false;
+            for (let j = 0; j < h && !covered; j++) covered = rgba[(j * w + i) * 4 + 3] > 16;
+            if (!covered) empty++;
+          }
+          return empty;
+        },
+        { x, y },
+      );
+    await expect.poll(() => gaps('.ink-draft-canvas')).toBe(0);
+    await pointer(page, 'pointerup', 43, 'pen', x + 260, y + 77);
+    await expect.poll(() => gaps('.ink-canvas')).toBe(0);
+    const pdf = (await page.getByTestId('pdf-page').boundingBox())!;
+    await expect
+      .poll(async () => {
+        const blank = (await stored(page))[0].pages[1];
+        return blank.strokes[0]?.points.map((p: { x: number }) =>
+          Math.round(pdf.x + (p.x / blank.width) * pdf.width - x),
+        );
+      })
+      .toEqual([
+        0,
+        ...Array.from({ length: 12 }, (_, i) => {
+          const dx = 17 * (i + 1);
+          return [dx - 8, dx];
+        }).flat(),
+        218,
+      ]);
+  });
 });
 
 test('Pencil paint takes priority over PDF refresh and lift-off cannot extend the stroke', async ({
@@ -651,6 +756,20 @@ test('a small Shorts placement plays upright at the saved size and can enlarge o
   await toolbar.getByTitle('動画を閉じる', { exact: true }).click();
   await expect(toolbar.locator('.toolbar-video-actions')).toHaveCount(0);
   expect((await page.getByTestId('video-box').boundingBox())!.width).toBeCloseTo(before.width, 0);
+  await page.getByRole('button', { name: '全画面表示を終了', exact: true }).click();
+  await page.getByRole('button', { name: 'ペン', exact: true }).click();
+  const select = page.getByRole('button', { name: '動画を選択', exact: true });
+  const ribbon = page.locator('.video-handle');
+  await expect(ribbon).toHaveCount(0);
+  await select.click();
+  await expect(ribbon).toBeVisible();
+  await page.getByRole('button', { name: '動画をページ内で再生', exact: true }).click();
+  await expect(iframe).toBeVisible();
+  await iframe.dispatchEvent('mock-ended');
+  await expect(iframe).toHaveCount(0);
+  await expect(ribbon).toHaveCount(0);
+  await select.click();
+  await expect(ribbon).toBeVisible();
   await page.reload();
   await expect(page.getByTestId('video-box')).toBeVisible();
   expect((await stored(page))[0].pages[0].videos[0]).toEqual(savedVideo);
@@ -682,6 +801,7 @@ test('collapsed videos retain their placement and play silently until the player
   await page.getByLabel('YouTube URL').fill('https://www.youtube.com/shorts/M7lc1UVf-VE');
   await page.getByRole('button', { name: 'このページに追加' }).click();
   const box = page.getByTestId('video-box');
+  const select = box.getByRole('button', { name: '動画を選択', exact: true });
   const play = box.getByRole('button', { name: '動画をページ内で再生' });
   const thumbnail = box.locator('img');
   const fold = box.getByTitle('動画を折りたたむ', { exact: true });
@@ -690,7 +810,7 @@ test('collapsed videos retain their placement and play silently until the player
   await expect.poll(savedVideos).toHaveLength(1);
   const [original] = await savedVideos();
   await expect(fold).toHaveCount(0);
-  await box.getByRole('button', { name: '動画を選択', exact: true }).click();
+  await select.click();
   const unfolded = (await box.boundingBox())!;
   await fold.click();
   await expect(thumbnail).toHaveCount(0);
@@ -707,13 +827,15 @@ test('collapsed videos retain their placement and play silently until the player
   await expect.poll(savedVideos).toEqual([{ ...original, collapsed: true }]);
 
   await page.reload();
-  await expect(play).toBeVisible();
+  await expect(select).toBeVisible();
   await expect(thumbnail).toHaveCount(0);
   await page.getByRole('button', { name: '全画面表示', exact: true }).click();
   const pageAnchor = () => box.evaluate((el) => [el.style.left, el.style.top]);
   const anchorBeforePlay = await pageAnchor();
-  const marker = (await play.boundingBox())!;
+  const marker = (await select.boundingBox())!;
   await expect(unfold).toHaveCount(0);
+  await select.click();
+  await expect(unfold).toBeVisible();
   await play.click();
   const iframe = box.locator('iframe');
   await expect(iframe).toBeVisible();
@@ -731,9 +853,11 @@ test('collapsed videos retain their placement and play silently until the player
     'https://www.youtube.com/watch?v=M7lc1UVf-VE',
   );
   await page.locator('.toolbar').getByTitle('動画を閉じる', { exact: true }).click();
-  await expect(play).toBeVisible();
+  await expect(select).toBeVisible();
   await expect(thumbnail).toHaveCount(0);
-  expect((await play.boundingBox())!.width).toBeCloseTo(44, 0);
+  expect((await select.boundingBox())!.width).toBeCloseTo(44, 0);
+  await select.click();
+  await expect(unfold).toBeVisible();
 });
 
 test('update check handles latest, offline and a saved reload without losing notes', async ({

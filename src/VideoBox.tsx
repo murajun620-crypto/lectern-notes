@@ -102,7 +102,6 @@ export default function VideoBox({
   video: v,
   page,
   selected,
-  selectBeforePlaying,
   onSelect,
   onDeselect,
   registerPlayback,
@@ -115,7 +114,6 @@ export default function VideoBox({
   video: Video;
   page: Page;
   selected: boolean;
-  selectBeforePlaying: boolean;
   onSelect: () => void;
   onDeselect: () => void;
   registerPlayback: RegisterPlayback;
@@ -155,6 +153,7 @@ export default function VideoBox({
   const close = useCallback(() => {
     setPlaying(false);
     setEnlarged(false);
+    setPlaybackState(-1);
   }, []);
   const playbackKey = `${page.id}:${v.id}`;
   useEffect(() => {
@@ -182,10 +181,9 @@ export default function VideoBox({
     visibleBounds.top * scale + 4,
     Math.max(visibleBounds.top * scale + 4, visibleBounds.bottom * scale - editHeight - 4),
   );
-  const selectFirst = selectBeforePlaying && !selected;
-  const playLabel = selectFirst ? '動画を選択' : '動画をページ内で再生';
+  const playLabel = selected ? '動画をページ内で再生' : '動画を選択';
   const activate = () => {
-    if (selectFirst) {
+    if (!selected) {
       onSelect();
       return;
     }
@@ -255,10 +253,13 @@ export default function VideoBox({
             },
             onAutoplayBlocked: () => setBlocked(true),
             onStateChange: (e: { data: number }) => {
-              if (!cancelled) {
-                setPlaybackState(e.data);
-                if (e.data === 1) setBlocked(false);
+              if (cancelled) return;
+              if (e.data === 0) {
+                close();
+                return;
               }
+              setPlaybackState(e.data);
+              if (e.data === 1) setBlocked(false);
             },
           },
         });
@@ -273,7 +274,7 @@ export default function VideoBox({
       player.current = undefined;
       host.current?.replaceChildren();
     };
-  }, [playing, v.videoId]);
+  }, [playing, v.videoId, close]);
   return (
     <div
       className={`video-box ${playing ? 'playing' : ''} ${selected ? 'selected' : ''} ${collapsed ? 'collapsed' : ''}`}
