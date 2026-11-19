@@ -471,8 +471,28 @@ test('Pencil paint takes priority over PDF refresh and lift-off cannot extend th
   const stage = (await page.getByTestId('stage').boundingBox())!;
   const start = stage.x + stage.width / 2 - 155;
   const y = stage.y + stage.height / 2;
-  await page.getByLabel('表示倍率').selectOption('2');
-  await pointer(page, 'pointerdown', 41, 'pen', start, y, { pressure: 0.06 });
+  await page.getByLabel('表示倍率').evaluate(
+    async (select: HTMLSelectElement, at) => {
+      select.value = '2';
+      select.dispatchEvent(new Event('change', { bubbles: true }));
+      await Promise.resolve();
+      document.querySelector('[data-testid=stage]')!.dispatchEvent(
+        new PointerEvent('pointerdown', {
+          bubbles: true,
+          pointerId: 41,
+          pointerType: 'pen',
+          isPrimary: true,
+          button: 0,
+          buttons: 1,
+          pressure: 0.06,
+          clientX: at.x,
+          clientY: at.y,
+        }),
+      );
+    },
+    { x: start, y },
+  );
+  await expect(page.getByLabel('表示倍率')).toHaveValue('2');
   for (let i = 1; i <= 10; i++)
     await pointer(page, 'pointermove', 41, 'pen', start + i * 15, y, { pressure: 0.06 });
   const draft = page.locator('.ink-draft-canvas');

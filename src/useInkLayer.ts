@@ -3,7 +3,7 @@ import type { RefObject } from 'react';
 import { changedStrokeBounds, drawStrokes, strokeBounds, strokeShape } from './model';
 import type { Page, Point, Stroke } from './model';
 import type { StackPage } from './page-stack';
-import { rasterScaleLimit } from './usePageViewport';
+import { afterViewportFrame, rasterScaleLimit, zoomRasterReserve } from './usePageViewport';
 import type { PageView } from './usePageViewport';
 
 type InkGeometry = {
@@ -63,6 +63,21 @@ function visibleStrokes(geometry: InkGeometry, strokes: Stroke[]) {
     const { left, right, top, bottom } = pixelBounds(geometry, strokeBounds(stroke));
     return right > left && bottom > top;
   });
+}
+
+function canRefreshNextFrame(strokes: Stroke[], neighbors: StackPage[], pageId: string) {
+  let budget = 4096;
+  for (const paths of [
+    strokes,
+    ...neighbors.filter((item) => item.page.id !== pageId).map((item) => item.page.strokes),
+  ]) {
+    for (const stroke of paths) {
+      budget -= 32 + stroke.points.length;
+      for (const erasure of stroke.erasures ?? []) budget -= 32 + erasure.points.length;
+      if (budget < 0) return false;
+    }
+  }
+  return true;
 }
 
 function paintChanges(
@@ -169,8 +184,8 @@ export function useInkLayer({
   const pageX = (size.w - pageWidth * actualScale) / 2 + pan.x;
   const pageY = (size.h - pageHeight * actualScale) / 2 + pan.y;
   const previewScale = Math.min(
-    fit * (devicePixelRatio || 1),
-    2048 / Math.max(pageWidth, pageHeight),
+    fit * (devicePixelRatio || 1) * zoomRasterReserve(1),
+    2560 / Math.max(pageWidth, pageHeight),
   );
 
   const paintInkPreview = (view: PageView) => {
@@ -180,20 +195,24 @@ export function useInkLayer({
     const paper = lastPreview.current;
     const screen = lastRaster.current;
     const paperReady = paper?.id === id && paper.strokes === saved && paper.scale === previewScale;
-    if (
-      screen?.id === id &&
-      screen.size === size &&
-      ((!paperReady && saved.length > 0) || stage.getAttribute('data-ink-preview') === 'screen')
-    ) {
-      const ratio = (fit * view.zoom) / (screen.fit * screen.zoom);
-      const x = size.w / 2 + view.pan.x - (size.w / 2 + screen.pan.x) * ratio;
-      const y = size.h / 2 + view.pan.y - (size.h / 2 + screen.pan.y) * ratio;
-      canvas.style.transform = `translate3d(${x}px, ${y}px, 0) scale(${ratio})`;
-      stage.setAttribute('data-ink-preview', 'screen');
-    } else {
-      canvas.style.transform = '';
-      stage.setAttribute('data-ink-preview', paperReady ? 'page' : 'stack');
+    if (screen?.id === id && screen.size === size && saved.length > 0) {
+      const magnification = (fit * view.zoom) / (screen.fit * screen.zoom);
+      const x = size.w / 2 + view.pan.x - (size.w / 2 + screen.pan.x) * magnification;
+      const y = size.h / 2 + view.pan.y - (size.h / 2 + screen.pan.y) * magnification;
+      const coversViewport =
+        x <= 0.5 &&
+        y <= 0.5 &&
+        x + size.w * magnification >= size.w - 0.5 &&
+        y + size.h * magnification >= size.h - 0.5;
+      const screenScale = rasterGeometry.current?.scale ?? 0;
+      if (!paperReady || (coversViewport && screenScale > paper.scale)) {
+        canvas.style.transform = `translate3d(${x}px, ${y}px, 0) scale(${magnification})`;
+        stage.setAttribute('data-ink-preview', 'screen');
+        return;
+      }
     }
+    canvas.style.transform = '';
+    stage.setAttribute('data-ink-preview', paperReady ? 'page' : 'stack');
   };
 
   const flushInk = useCallback(() => pendingInk.current?.(), []);
@@ -297,7 +316,9 @@ export function useInkLayer({
   useLayoutEffect(() => {
     if (interacting.current) return;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let cancelFrame: (() => void) | undefined;
     const paint = () => {
+      cancelFrame?.();
       clearTimeout(timer);
       if (interacting.current) {
         timer = setTimeout(paint, 80);
@@ -394,9 +415,11 @@ export function useInkLayer({
       (last?.id !== id || last.strokes === strokes)
     ) {
       pendingInk.current = paint;
-      timer = setTimeout(paint, 80);
+      if (canRefreshNextFrame(strokes, neighbors, id)) cancelFrame = afterViewportFrame(paint);
+      else timer = setTimeout(paint, 80);
     } else paint();
     return () => {
+      cancelFrame?.();
       clearTimeout(timer);
       if (pendingInk.current === paint) pendingInk.current = null;
     };

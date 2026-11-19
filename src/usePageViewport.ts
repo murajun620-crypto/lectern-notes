@@ -9,10 +9,23 @@ export type PageView = { zoom: number; pan: Offset };
 const maxPageZoom = 10;
 export const pageZoomSteps = [1, 1.25, 1.5, 2, 3, 4, 5, 6, 8, maxPageZoom];
 export const clampPageZoom = (zoom: number) => clamp(zoom, 1, maxPageZoom);
+export const zoomRasterReserve = (zoom: number) => Math.min(1.35, maxPageZoom / zoom);
 
 // Bound both the texture dimensions and total pixel memory of each canvas.
 export function rasterScaleLimit(width: number, height: number) {
   return Math.min(4096 / Math.max(width, height), Math.sqrt(8_000_000 / (width * height)));
+}
+
+/** Give the final gesture position a paint opportunity before queuing raster work. */
+export function afterViewportFrame(callback: () => void) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const frame = requestAnimationFrame(() => {
+    timer = setTimeout(callback, 0);
+  });
+  return () => {
+    cancelAnimationFrame(frame);
+    clearTimeout(timer);
+  };
 }
 
 /** The compositor follows the fingers; React and canvas resolution settle after release. */
@@ -72,9 +85,14 @@ export function usePageViewport({
     frame = useRef<number | null>(null),
     idle = useRef<ReturnType<typeof setTimeout> | undefined>(undefined),
     previousPage = useRef(pageId);
+  const fitScale = fit * Math.min(devicePixelRatio || 1, 2);
+  const maxScale = rasterScaleLimit(width, height);
   const rasterScale = Math.min(
-    fit * Math.min(devicePixelRatio || 1, 2),
-    rasterScaleLimit(width, height),
+    maxScale,
+    Math.max(
+      fitScale,
+      Math.min(fitScale * zoomRasterReserve(1), Math.sqrt(5_000_000 / (width * height))),
+    ),
   );
   const limit = useCallback(
     (next: Offset, z = view.current.zoom): Offset => ({

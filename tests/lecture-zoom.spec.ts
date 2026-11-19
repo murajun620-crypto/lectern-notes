@@ -172,7 +172,16 @@ test('pinch reuses the backing bitmap and sharpens the visible region after rele
     let released = 0;
     const stage = document.querySelector('[data-testid=stage]')!;
     const ink = stage.querySelector('.ink-canvas');
-    stage.addEventListener('touchend', () => (released = performance.now()), { capture: true });
+    stage.addEventListener(
+      'touchend',
+      () => {
+        released = performance.now();
+        requestAnimationFrame(
+          () => ((window as any).__pinchFirstFrame = performance.now() - released),
+        );
+      },
+      { capture: true },
+    );
     const clear = CanvasRenderingContext2D.prototype.clearRect;
     CanvasRenderingContext2D.prototype.clearRect = function (...args) {
       if (released && this.canvas === ink)
@@ -224,8 +233,11 @@ test('pinch reuses the backing bitmap and sharpens the visible region after rele
   await expect(page.locator('.pdf-detail-layer canvas')).toBeVisible();
   expect(await page.evaluate(() => (window as any).__rasterChanges)).toEqual([]);
   await expect(page.getByTestId('ink-canvas')).toBeVisible();
-  const inkRefresh = await page.evaluate(() => (window as any).__postPinchInk[0]);
-  expect(inkRefresh).toBeGreaterThanOrEqual(70);
+  const timing = await page.evaluate(() => ({
+    firstFrame: (window as any).__pinchFirstFrame,
+    inkRefresh: (window as any).__postPinchInk[0],
+  }));
+  expect(timing.inkRefresh).toBeGreaterThanOrEqual(timing.firstFrame);
   await expect(page.locator('.ink-page-preview')).toBeHidden();
   await expect(page.locator('.pdf-loading')).toHaveCount(0);
   await page.getByLabel('表示倍率').selectOption('1');
@@ -267,6 +279,7 @@ test('continuous page focus keeps the sharp PDF pixels aligned across a touch re
   await touch(page, 'touchstart', [a]);
   await touch(page, 'touchmove', [b]);
   const kept = view.locator('canvas[data-keep]');
+  await expect(detail).not.toHaveCSS('transform', 'none');
   const before = await kept.boundingBox();
   await touch(page, 'touchend', [], [b]);
   await expect(page.getByLabel('ページ番号')).toHaveValue('2');
@@ -339,6 +352,66 @@ test('video placement and inline player stay aligned after compositor zoom', asy
 
 test.describe('high-DPI PDF detail rendering', () => {
   test.use({ viewport: { width: 1024, height: 768 }, deviceScaleFactor: 2 });
+
+  test('a same-page pinch keeps high-resolution PDF and uses the sharper ink pixels', async ({
+    page,
+  }) => {
+    await demo(page);
+    await page.getByLabel('ページ表示').selectOption('single');
+    const stage = page.getByTestId('stage');
+    const stageBox = (await stage.boundingBox())!;
+    const x = stageBox.x + stageBox.width / 2;
+    const y = stageBox.y + stageBox.height / 2;
+    const contacts = (d: number) => [
+      { identifier: 1, clientX: x - d, clientY: y },
+      { identifier: 2, clientX: x + d, clientY: y },
+    ];
+    const zoom = page.getByLabel('表示倍率');
+    const detail = page.locator('.pdf-detail-surface canvas');
+    const density = (canvas: typeof detail) =>
+      canvas.evaluate((c: HTMLCanvasElement) => c.width / c.getBoundingClientRect().width);
+    await touch(page, 'touchstart', contacts(40));
+    await touch(page, 'touchmove', contacts(50));
+    await touch(page, 'touchend', [], contacts(50));
+    await expect(zoom).toHaveValue('1.25');
+    await expect(detail).toHaveCount(0);
+    expect(await density(page.locator('.pdf-canvas'))).toBeGreaterThanOrEqual(2);
+
+    await zoom.selectOption('2');
+    await expect(detail).toBeVisible();
+    await detail.evaluate((c) => c.setAttribute('data-test-reserve', ''));
+    const ink = page.getByTestId('ink-canvas');
+    const lineY = y - 56;
+    await page.mouse.move(x - 70, lineY);
+    await page.mouse.down();
+    await page.mouse.move(x + 70, lineY, { steps: 10 });
+    await page.mouse.up();
+    const alpha = (sampleY: number) =>
+      ink.evaluate(
+        (canvas: HTMLCanvasElement, p) => {
+          const r = canvas.getBoundingClientRect();
+          const x = Math.floor(((p.x - r.left) * canvas.width) / r.width);
+          const y = Math.floor(((p.y - r.top) * canvas.height) / r.height);
+          return canvas.getContext('2d')!.getImageData(x, y, 1, 1).data[3];
+        },
+        { x, y: sampleY },
+      );
+    await expect.poll(() => alpha(lineY)).toBeGreaterThan(240);
+    await touch(page, 'touchstart', contacts(40));
+    await touch(page, 'touchmove', contacts(50));
+    await expect(stage).toHaveAttribute('data-ink-preview', 'screen');
+    expect(await density(detail)).toBeGreaterThanOrEqual(2);
+    expect(await density(ink)).toBeCloseTo(1.6, 1);
+    expect(await alpha(y - 56 * 1.25)).toBeGreaterThan(240);
+    await expect(detail).toHaveAttribute('data-test-reserve', '');
+    await touch(page, 'touchend', [], contacts(50));
+    await expect(zoom).toHaveValue('2.5');
+    await expect(stage).not.toHaveAttribute('data-ink-preview');
+    await expect(detail).not.toHaveAttribute('data-test-reserve');
+    await expect(page.locator('.pdf-detail-surface')).toHaveCSS('transform', 'none');
+    expect(await density(ink)).toBeCloseTo(2, 1);
+    expect(await alpha(y - 56 * 1.25)).toBeGreaterThan(240);
+  });
 
   test('renders the visible PDF at device resolution at 1000%, including after panning', async ({
     page,

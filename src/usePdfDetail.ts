@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 import type { RefObject } from 'react';
 import type { Page } from './model';
 import { renderPage } from './pdf';
-import { rasterScaleLimit } from './usePageViewport';
+import { afterViewportFrame, rasterScaleLimit, zoomRasterReserve } from './usePageViewport';
 import type { PageView } from './usePageViewport';
 
 /** Reuse native-resolution pixels as long as they cover the visible part of the page. */
@@ -33,6 +33,7 @@ export function usePdfDetail({
       {
         canvas: HTMLCanvasElement;
         scale: number;
+        displayScale: number;
         left: number;
         top: number;
         right: number;
@@ -57,15 +58,18 @@ export function usePdfDetail({
     const visibleW = visible.right - visible.left;
     const visibleH = visible.bottom - visible.top;
     if (visibleW <= 0 || visibleH <= 0) return;
-    const density = Math.min(devicePixelRatio || 1, rasterScaleLimit(visibleW, visibleH));
-    const scale = displayScale * density;
-    if (baseScale >= scale - 1e-6) return;
+    const nativeDensity = Math.min(devicePixelRatio || 1, rasterScaleLimit(visibleW, visibleH));
+    const requiredScale = displayScale * nativeDensity;
+    if (baseScale >= requiredScale - 1e-6) return;
 
     const last = cache.current.get(id);
-    const tolerance = 1 / density;
+    const tolerance = 1 / nativeDensity;
     if (
       last?.canvas.isConnected &&
-      last.scale >= scale - 1e-6 &&
+      last.scale >= requiredScale - 1e-6 &&
+      // Re-rasterize a substantial zoom at its final pixel grid. The retained image
+      // covers the first frame, while a fractional transform can still soften edges.
+      Math.abs(last.displayScale / displayScale - 1) < 0.12 &&
       originX + last.left * displayScale <= visible.left + tolerance &&
       originY + last.top * displayScale <= visible.top + tolerance &&
       originX + last.right * displayScale >= visible.right - tolerance &&
@@ -82,11 +86,17 @@ export function usePdfDetail({
     };
     // Extra coverage must fit in memory without lowering visible resolution.
     const box =
-      density <= rasterScaleLimit(expanded.right - expanded.left, expanded.bottom - expanded.top)
+      nativeDensity <=
+      rasterScaleLimit(expanded.right - expanded.left, expanded.bottom - expanded.top)
         ? expanded
         : visible;
     const canvasWidth = box.right - box.left;
     const canvasHeight = box.bottom - box.top;
+    const density = Math.min(
+      nativeDensity * zoomRasterReserve(zoom),
+      rasterScaleLimit(canvasWidth, canvasHeight),
+    );
+    const scale = displayScale * density;
     const abort = new AbortController();
     let timer: ReturnType<typeof setTimeout>;
     const start = () => {
@@ -128,6 +138,7 @@ export function usePdfDetail({
           cache.current.set(id, {
             canvas,
             scale,
+            displayScale,
             left: (box.left - originX) / displayScale,
             top: (box.top - originY) / displayScale,
             right: (box.right - originX) / displayScale,
@@ -142,8 +153,9 @@ export function usePdfDetail({
           if (!published) canvas.width = canvas.height = 1;
         });
     };
-    timer = setTimeout(start, 140);
+    const cancelStart = afterViewportFrame(start);
     return () => {
+      cancelStart();
       clearTimeout(timer);
       abort.abort();
     };

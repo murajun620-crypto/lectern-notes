@@ -997,6 +997,9 @@ h3 {
   z-index: 2;
   pointer-events: none;
 }
+.ink-canvas {
+  transform-origin: top left;
+}
 .ink-page-preview,
 .stack-ink-canvas,
 .stage[data-ink-preview='page'] > .ink-canvas,
