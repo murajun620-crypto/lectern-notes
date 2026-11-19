@@ -45,6 +45,8 @@ type PencilContact = {
   downAt: number;
   pointerId?: number;
   touchId?: number;
+  touchDownAt?: number;
+  shortTouchEnd?: Point;
   pointerEnded?: boolean;
   touchEnded?: boolean;
   lastPointerAt?: number;
@@ -493,6 +495,8 @@ export default function Stage({
     points.push(p);
     return true;
   };
+  const appendPencilPoint = (points: Point[], p: Point) =>
+    appendPoint(points, p, (points.length === 1 ? 1 : 0.25) / screenScale());
   const appendSamples = (e: ReactPointerEvent, g: NonNullable<typeof gesture.current>) => {
     const { points, paperRect } = g;
     const event = e.nativeEvent;
@@ -550,7 +554,7 @@ export default function Stage({
     }
     pencil.lastPointerPacket = { points: packet, receivedAt: performance.now() };
     const count = g.points.length;
-    for (let i = start; i < packet.length; i++) appendPoint(g.points, packet[i], spacing);
+    for (let i = start; i < packet.length; i++) appendPencilPoint(g.points, packet[i]);
     if (g.points.length === count) return false;
     pencil.lastWasTouch = false;
     return true;
@@ -821,7 +825,8 @@ export default function Stage({
         points: gesture.current.points,
       };
       gesture.current.stroke = s;
-      previewStroke(s);
+      // A Pencil down point is only a dot if contact ends without movement.
+      if (e.pointerType !== 'pen') previewStroke(s);
     }
     if (kind === 'erase') {
       inkPriority.begin();
@@ -857,7 +862,8 @@ export default function Stage({
     if (gesture.current !== g) return;
     gesture.current = null;
     if (g.pencil) {
-      const { touchId, pointerId } = g.pencil;
+      const { touchId, pointerId, shortTouchEnd } = g.pencil;
+      if (shortTouchEnd && g.points.length === 1) g.points.push(shortTouchEnd);
       const now = performance.now();
       if (pointerId !== undefined) palm.current.penUp(pointerId, now);
       if (touchId !== undefined && stylusContact.current === touchId) {
@@ -869,13 +875,17 @@ export default function Stage({
     onChange(g.pageId, (prev) => ({ ...prev, strokes: [...prev.strokes, stroke] }));
     clearInkGesture();
   };
-  const endPencil = (g: NonNullable<typeof gesture.current>, source: 'pointer' | 'touch') => {
+  const endPencil = (
+    g: NonNullable<typeof gesture.current>,
+    source: 'pointer' | 'touch',
+    waitForShortTouch = false,
+  ) => {
     const pencil = g.pencil!;
     if (source === 'pointer') pencil.pointerEnded = true;
     else pencil.touchEnded = true;
     const waiting =
       source === 'pointer'
-        ? pencil.touchId !== undefined && !pencil.touchEnded
+        ? !pencil.touchEnded && (pencil.touchId !== undefined || waitForShortTouch)
         : pencil.pointerId !== undefined && !pencil.pointerEnded;
     if (!waiting) {
       finishStroke(g);
@@ -935,6 +945,7 @@ export default function Stage({
       palm.current.penDown(e.pointerId, performance.now());
     } else {
       contact.touchId = e.pointerId;
+      contact.touchDownAt = e.timeStamp;
       stylusContact.current = e.pointerId;
       palm.current.penDown(nativePencil, performance.now());
     }
@@ -1022,7 +1033,7 @@ export default function Stage({
     if (g.pencil) {
       if (!g.pencil.pointerEnded && e.timeStamp >= g.pencil.downAt) {
         if (!cancel) appendPencilSamples(e.nativeEvent, g, true);
-        endPencil(g, 'pointer');
+        endPencil(g, 'pointer', !cancel && g.points.length === 1);
       }
       return;
     }
@@ -1080,8 +1091,11 @@ export default function Stage({
     }
     clearInkGesture();
   };
-  const endNativePencil = (changed: React.TouchList) => {
-    const contact = Array.from(changed).find(
+  const endNativePencil = (e: React.TouchEvent, cancel = false) => {
+    const g = gesture.current;
+    const pencil = g?.pencil;
+    const contacts = Array.from(e.changedTouches);
+    const contact = contacts.find(
       (t) => t.identifier === stylusContact.current || (t as StylusTouch).touchType === 'stylus',
     );
     if (!contact) return false;
@@ -1089,8 +1103,27 @@ export default function Stage({
       stylusContact.current = null;
       palm.current.penUp(nativePencil, performance.now());
     }
-    const g = gesture.current;
-    if (g?.pencil?.touchId === contact.identifier && !g.pencil.touchEnded) endPencil(g, 'touch');
+    if (
+      g &&
+      pencil &&
+      !pencil.touchEnded &&
+      (pencil.touchId ?? pencil.pointerId) === contact.identifier
+    ) {
+      const elapsed = e.timeStamp - (pencil.touchDownAt ?? pencil.downAt);
+      const distance = Math.hypot(contact.clientX - g.client.x, contact.clientY - g.client.y);
+      if (
+        !cancel &&
+        g.points.length === 1 &&
+        elapsed >= 0 &&
+        elapsed <= 120 &&
+        distance > 1 &&
+        distance <= 16
+      ) {
+        // The identified native contact can be the only source of an endpoint for a tiny mark.
+        pencil.shortTouchEnd = { ...point(contact, g.paperRect), p: g.start.p };
+      }
+      endPencil(g, 'touch');
+    }
     return true;
   };
   const renderVideos = (owner: Page, ownerFit: number, offsetY = 0) => {
@@ -1354,8 +1387,7 @@ export default function Stage({
       }}
       onTouchMove={(e) => {
         const contact = Array.from(e.changedTouches).find(
-          (t) =>
-            t.identifier === stylusContact.current && (t as StylusTouch).touchType === 'stylus',
+          (t) => t.identifier === stylusContact.current,
         );
         if (contact) {
           const g = gesture.current;
@@ -1378,7 +1410,7 @@ export default function Stage({
               packet.points.some(
                 (sample) => Math.hypot(sample.x - p.x, sample.y - p.y) <= spacing * 2,
               );
-            if (!repeatsPointer && appendPoint(g.points, p, spacing)) {
+            if (!repeatsPointer && appendPencilPoint(g.points, p)) {
               pencil.lastWasTouch = true;
               previewStroke(g.stroke!);
             }
@@ -1436,7 +1468,7 @@ export default function Stage({
         }
       }}
       onTouchEnd={(e) => {
-        if (endNativePencil(e.changedTouches)) return;
+        if (endNativePencil(e)) return;
         if (nativePinch.current) {
           nativePinch.current.ending = true;
           if (interacting.current) commitView();
@@ -1462,7 +1494,7 @@ export default function Stage({
         if (!turned && (g.panning || g.interrupted)) finishPan(g.history, e.timeStamp);
       }}
       onTouchCancel={(e) => {
-        if (endNativePencil(e.changedTouches)) return;
+        if (endNativePencil(e, true)) return;
         if ((swipe.current?.panning || swipe.current?.interrupted) && interacting.current)
           commitView();
         swipe.current = null;

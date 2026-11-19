@@ -293,6 +293,126 @@ test('Pencil writes in hand mode, a resting palm stays blocked, and two-finger t
 test.describe('Pencil contact samples', () => {
   test.use({ viewport: { width: 1024, height: 768 }, deviceScaleFactor: 2 });
 
+  test('holds the initial dot and recovers short Pencil marks from nearby native endpoints', async ({
+    page,
+  }) => {
+    await demo(page);
+    const stage = page.getByTestId('stage');
+    const info = await stage.evaluate(async (el) => {
+      HTMLElement.prototype.setPointerCapture = () => {};
+      const paper = el.querySelector('[data-testid=pdf-page]')!.getBoundingClientRect();
+      const x = Math.round(paper.left + paper.width * 0.25);
+      const y = Math.round(paper.top + paper.height * 0.38);
+      const visibleInitialInk: number[] = [];
+      const draft = el.querySelector<HTMLCanvasElement>('.ink-draft-canvas')!;
+      const frame = () => new Promise(requestAnimationFrame);
+      const draftPixel = () => {
+        const box = draft.getBoundingClientRect();
+        const px = Math.floor(((x - box.x) * draft.width) / box.width);
+        const py = Math.floor(((y - box.y) * draft.height) / box.height);
+        const rgba = draft.getContext('2d')!.getImageData(px - 2, py - 2, 5, 5).data;
+        return Math.max(...rgba.filter((_, i) => i % 4 === 3));
+      };
+      const strokes = [
+        { move: 0.4, end: 6 },
+        { nativeOnly: true, end: 7 },
+        { end: 0.4 },
+        { end: 30 },
+        { end: 8, cancel: true },
+        { move: 4, end: 11 },
+        { skipTouchStart: true, end: 8 },
+        { end: 8, duration: 180 },
+        { pointerOnly: true, end: 8 },
+      ];
+      for (const [i, stroke] of strokes.entries()) {
+        const id = 43 + i;
+        const at = performance.now();
+        const base = x + i * 20;
+        const duration = stroke.duration ?? 15;
+        const send = (event: Event, time: number) => {
+          Object.defineProperty(event, 'timeStamp', { value: at + time });
+          el.dispatchEvent(event);
+        };
+        const touch = (type: string, dx: number, time: number, touchType?: string) => {
+          const event = new Event(type, { bubbles: true });
+          Object.defineProperty(event, 'changedTouches', {
+            value: [{ identifier: id, clientX: base + dx, clientY: y, force: 0, touchType }],
+          });
+          send(event, time);
+        };
+        const pointer = (type: string, dx: number, time: number) => {
+          const down = type === 'pointerdown';
+          send(
+            new PointerEvent(type, {
+              bubbles: true,
+              pointerId: id,
+              pointerType: 'pen',
+              isPrimary: true,
+              button: 0,
+              buttons: down ? 1 : 0,
+              pressure: down ? 0.02 : 0,
+              clientX: base + dx,
+              clientY: y,
+            }),
+            time,
+          );
+        };
+        if (!stroke.nativeOnly) pointer('pointerdown', 0, 0);
+        if (!stroke.skipTouchStart && !stroke.pointerOnly) touch('touchstart', 0, 0, 'stylus');
+        if (i === 0) {
+          await frame();
+          await frame();
+          visibleInitialInk.push(draftPixel());
+        }
+        if (stroke.move) touch('touchmove', stroke.move, 5);
+        if (i === 0) {
+          await frame();
+          await frame();
+          visibleInitialInk.push(draftPixel());
+        }
+        if (!stroke.nativeOnly)
+          pointer(stroke.cancel ? 'pointercancel' : 'pointerup', 50, duration);
+        if (!stroke.pointerOnly)
+          touch(stroke.cancel ? 'touchcancel' : 'touchend', stroke.end, duration, 'stylus');
+      }
+      return { x, y, paper: paper.toJSON(), visibleInitialInk };
+    });
+    expect(info.visibleInitialInk).toEqual([0, 0]);
+    await expect
+      .poll(async () => {
+        const pg = (await stored(page))[0]?.pages[0];
+        return pg?.strokes.map((stroke: { points: { x: number; y: number }[] }, i: number) =>
+          stroke.points.map((p) => [
+            Math.round(info.paper.x + (p.x * info.paper.width) / pg.width - info.x - i * 20),
+            Math.round(info.paper.y + (p.y * info.paper.height) / pg.height - info.y),
+          ]),
+        );
+      })
+      .toEqual([
+        [
+          [0, 0],
+          [6, 0],
+        ],
+        [
+          [0, 0],
+          [7, 0],
+        ],
+        [[0, 0]],
+        [[0, 0]],
+        [[0, 0]],
+        [
+          [0, 0],
+          [4, 0],
+        ],
+        [
+          [0, 0],
+          [8, 0],
+        ],
+        [[0, 0]],
+        [[0, 0]],
+      ]);
+  });
+
   test('retains successive brief Pencil contacts and confirmed movement at lift-off', async ({
     page,
   }) => {

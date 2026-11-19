@@ -190,6 +190,7 @@ const thinningByPen = { ballpoint: 0.14, fountain: 0.82, pencil: 0.3, brush: 0.8
 export function penOutline(stroke: Stroke) {
   const { penKind, width } = stroke;
   const centerline = strokeCenterline(stroke);
+  const thinning = penKind ? thinningByPen[penKind] : 0.55;
   let taper = 0;
   if (penKind === 'brush' && centerline.length > 2) {
     let length = 0;
@@ -201,34 +202,46 @@ export function penOutline(stroke: Stroke) {
     // Keep a body on short marks before bringing in the brush's tapered ends.
     taper = clamp((length / width - 3) / 3, 0, 1);
   }
-  return getStroke(
-    centerline.map((p, i) => {
-      let pressure = Math.max(penKind === 'brush' ? 0.24 : 0.32, p.p);
-      if (penKind === 'fountain') {
-        // The angle of a broad nib changes the width even at a steady pressure.
-        const before = centerline[Math.max(0, i - 1)];
-        const after = centerline[Math.min(centerline.length - 1, i + 1)];
-        const dx = after.x - before.x;
-        const dy = after.y - before.y;
-        const length = Math.hypot(dx, dy);
-        const acrossNib = length ? Math.abs(0.6 * dx + 0.8 * dy) / length : 0.6;
-        pressure = 0.18 + (0.2 + 0.65 * acrossNib) * (0.6 + 0.4 * pressure);
+  const samples = centerline.map((p, i) => {
+    let pressure = Math.max(penKind === 'brush' ? 0.24 : 0.32, p.p);
+    if (penKind === 'fountain') {
+      // The angle of a broad nib changes the width even at a steady pressure.
+      const before = centerline[Math.max(0, i - 1)];
+      const after = centerline[Math.min(centerline.length - 1, i + 1)];
+      const dx = after.x - before.x;
+      const dy = after.y - before.y;
+      const length = Math.hypot(dx, dy);
+      const acrossNib = length ? Math.abs(0.6 * dx + 0.8 * dy) / length : 0.6;
+      pressure = 0.18 + (0.2 + 0.65 * acrossNib) * (0.6 + 0.4 * pressure);
+    }
+    return [p.x, p.y, pressure];
+  });
+  if (samples.length === 2) {
+    // A segment with only two samples needs brush caps, not inferred intermediate motion.
+    const [start, end] = samples;
+    const direction = Math.atan2(end[1] - start[1], end[0] - start[0]);
+    const outline: number[][] = [];
+    for (const [i, [x, y, pressure]] of [end, start].entries()) {
+      const radius = width * (0.5 + thinning * (pressure - 0.5));
+      for (let step = 0; step <= 8; step++) {
+        const angle = direction + Math.PI * (i - 0.5 + step / 8);
+        outline.push([x + Math.cos(angle) * radius, y + Math.sin(angle) * radius]);
       }
-      return [p.x, p.y, pressure];
+    }
+    return outline;
+  }
+  return getStroke(samples, {
+    size: width,
+    thinning,
+    smoothing: 0.65,
+    streamline: 0.2,
+    simulatePressure: false,
+    last: true,
+    ...(taper > 0 && {
+      start: { taper: width * 0.65 * taper },
+      end: { taper: width * 2.6 * taper },
     }),
-    {
-      size: width,
-      thinning: penKind ? (thinningByPen[penKind] ?? 0.55) : 0.55,
-      smoothing: 0.65,
-      streamline: 0.2,
-      simulatePressure: false,
-      last: true,
-      ...(taper > 0 && {
-        start: { taper: width * 0.65 * taper },
-        end: { taper: width * 2.6 * taper },
-      }),
-    },
-  );
+  });
 }
 
 type InkBounds = { left: number; top: number; right: number; bottom: number };

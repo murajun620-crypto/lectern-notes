@@ -147,6 +147,23 @@ describe('smooth pressure-bearing stroke outline', () => {
       expect(Math.max(...ys) - Math.min(...ys)).toBeGreaterThan(2);
     }
   });
+  it('uses the selected nib radius on a two-sample hairline', () => {
+    const outline = penOutline({
+      ...stroke,
+      penKind: 'brush',
+      width: 4,
+      points: [
+        { x: 0, y: 0, p: 0.04 },
+        { x: 2, y: 0, p: 0.04 },
+      ],
+    });
+    const xs = outline.map(([x]) => x);
+    const ys = outline.map(([, y]) => y);
+    const radius = 4 * (0.5 + 0.86 * (0.24 - 0.5));
+    expect(Math.min(...xs)).toBeCloseTo(-radius);
+    expect(Math.max(...xs)).toBeCloseTo(2 + radius);
+    expect(Math.max(...ys) - Math.min(...ys)).toBeCloseTo(2 * radius);
+  });
   it('interpolates sparse pen curves inside the contact span and preserves pressure and corners', () => {
     const points = [
       { x: 0, y: 0, p: 0.12 },
