@@ -36,11 +36,14 @@ test('a fast one-finger native touch scroll coasts across a page and slows down'
     send('touchmove', -120, 50);
     send('touchend', -120, 56);
     const offset = () => ({ y: target.getBoundingClientRect().y, t: performance.now() });
+    const sample = async (delay: number) => {
+      await new Promise((r) => setTimeout(r, delay));
+      await new Promise(requestAnimationFrame);
+      return offset();
+    };
     const first = offset();
-    await new Promise((r) => setTimeout(r, 80));
-    const middle = offset();
-    await new Promise((r) => setTimeout(r, 140));
-    return [first, middle, offset()];
+    const middle = await sample(95);
+    return [first, middle, await sample(220)];
   });
   const [a, b, c] = offsets;
   expect(a.y - b.y).toBeGreaterThan(40);
