@@ -9,11 +9,13 @@ export default memo(function PageStackPreview({
   fit,
   active,
   shouldPause,
+  shouldPausePdf,
 }: {
   page: Page;
   fit: number;
   active: boolean;
   shouldPause: () => boolean;
+  shouldPausePdf: () => boolean;
 }) {
   const pdf = useRef<HTMLCanvasElement>(null);
   const ink = useRef<HTMLCanvasElement>(null);
@@ -30,7 +32,7 @@ export default memo(function PageStackPreview({
       scale,
       abort.signal,
       undefined,
-      shouldPause,
+      shouldPausePdf,
     )
       .then(() => {
         if (abort.signal.aborted) return;
@@ -45,7 +47,7 @@ export default memo(function PageStackPreview({
         temp.width = temp.height = 1;
       });
     return () => abort.abort();
-  }, [id, width, height, sourcePage, assetId, scale, active, shouldPause]);
+  }, [id, width, height, sourcePage, assetId, scale, active, shouldPausePdf]);
 
   useEffect(() => {
     const canvas = ink.current!;

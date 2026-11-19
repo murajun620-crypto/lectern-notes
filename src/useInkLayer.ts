@@ -41,21 +41,27 @@ function inkScene(
   density: number,
   origin: PageView['pan'],
 ): InkScene {
-  const layers = [{ geometry, strokes: visibleStrokes(geometry, strokes) }];
+  const layers: InkScene = [];
+  const add = (bounds: InkGeometry, paths: Stroke[]) => {
+    const { x, y, width, height, pageWidth, pageHeight, scale } = bounds;
+    if (
+      !paths.length ||
+      x >= width ||
+      x + pageWidth * scale <= 0 ||
+      y >= height ||
+      y + pageHeight * scale <= 0
+    )
+      return;
+    layers.push({ geometry: bounds, strokes: visibleStrokes(bounds, paths) });
+  };
+  add(geometry, strokes);
   for (const { page, fit, top } of neighbors) {
     if (!page.strokes.length) continue;
     const scale = fit * zoom * density;
     const x = origin.x - (page.width * scale) / 2;
     const y = origin.y + (top - center) * zoom * density;
-    if (
-      x >= geometry.width ||
-      x + page.width * scale <= 0 ||
-      y >= geometry.height ||
-      y + page.height * scale <= 0
-    )
-      continue;
     const bounds = { ...geometry, x, y, scale, pageWidth: page.width, pageHeight: page.height };
-    layers.push({ geometry: bounds, strokes: visibleStrokes(bounds, page.strokes) });
+    add(bounds, page.strokes);
   }
   return layers;
 }
@@ -173,6 +179,7 @@ export function useInkLayer({
   pan,
   settled,
   interacting,
+  coastSpeed,
   working,
   lasso,
   neighbors,
@@ -187,6 +194,7 @@ export function useInkLayer({
   pan: { x: number; y: number };
   settled: number;
   interacting: RefObject<boolean>;
+  coastSpeed: RefObject<number>;
   working: Stroke[] | null;
   lasso: Point[];
   neighbors: StackPage[];
@@ -390,7 +398,8 @@ export function useInkLayer({
     const anchor = liveAttempt.current?.view ?? frame?.view ?? screen ?? { zoom, pan };
     const travel = Math.hypot(view.pan.x - anchor.pan.x, view.pan.y - anchor.pan.y);
     const panDistance = frame ? Math.max(28, frame.margin / 2) : 16;
-    if (
+    if (coastSpeed.current > 0.8) liveRequest.current?.();
+    else if (
       (saved.length || neighbors.some((item) => item.page.strokes.length)) &&
       (view.zoom >= anchor.zoom * 1.3 || travel >= panDistance)
     )

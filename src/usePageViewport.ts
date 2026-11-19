@@ -30,6 +30,7 @@ export function afterViewportFrame(callback: () => void) {
 
 /** The compositor follows the fingers; React and canvas resolution settle after release. */
 export function usePageViewport({
+  viewport,
   paper,
   backdrop,
   detail,
@@ -48,6 +49,7 @@ export function usePageViewport({
   settleStack,
   takePagePan,
 }: {
+  viewport: RefObject<HTMLDivElement | null>;
   paper: RefObject<HTMLDivElement | null>;
   backdrop: RefObject<HTMLDivElement | null>;
   detail: RefObject<HTMLDivElement | null>;
@@ -85,6 +87,8 @@ export function usePageViewport({
     frame = useRef<number | null>(null),
     idle = useRef<ReturnType<typeof setTimeout> | undefined>(undefined),
     previousPage = useRef(pageId);
+  const coastFrame = useRef<number | null>(null);
+  const coastSpeed = useRef(0);
   const fitScale = fit * Math.min(devicePixelRatio || 1, 2);
   const maxScale = rasterScaleLimit(width, height);
   const rasterScale = Math.min(
@@ -175,52 +179,112 @@ export function usePageViewport({
     for (const item of detailViews.current) releaseDetail(item);
     detailViews.current = [];
   }, [releaseDetail]);
+  const stopCoast = useCallback(() => {
+    if (coastFrame.current === null) return false;
+    cancelAnimationFrame(coastFrame.current);
+    coastFrame.current = null;
+    coastSpeed.current = 0;
+    return true;
+  }, []);
   const begin = useCallback(() => {
+    stopCoast();
     interacting.current = true;
     clearTimeout(idle.current);
-  }, []);
-  const move = useCallback(
+  }, [stopCoast]);
+  const applyView = useCallback(
     (z: number, next: Offset) => {
       const zoom = clampPageZoom(z);
       const current = view.current;
-      if (current.zoom === zoom && current.pan.x === next.x && current.pan.y === next.y) return;
+      if (current.zoom === zoom && current.pan.x === next.x && current.pan.y === next.y)
+        return false;
       view.current = { zoom, pan: next };
       moved.current = true;
       showInkPreview();
+      return true;
+    },
+    [showInkPreview],
+  );
+  const move = useCallback(
+    (z: number, next: Offset) => {
+      if (!applyView(z, next)) return;
       if (frame.current === null)
         frame.current = requestAnimationFrame(() => {
           frame.current = null;
           paint();
         });
     },
-    [paint, showInkPreview],
+    [applyView, paint],
   );
-  const commit = useCallback(() => {
-    interacting.current = false;
-    clearTimeout(idle.current);
-    if (frame.current !== null) cancelAnimationFrame(frame.current);
-    frame.current = null;
-    paint();
-    const current = view.current;
-    setPan((previous) =>
-      previous.x === current.pan.x && previous.y === current.pan.y ? previous : current.pan,
-    );
-    setZoom(current.zoom);
-    if (moved.current) {
-      moved.current = false;
-      setSettled((v) => v + 1);
-      settleStack(current);
-    }
-  }, [paint, setZoom, settleStack]);
+  const commit = useCallback(
+    (focusPage = true) => {
+      stopCoast();
+      interacting.current = false;
+      clearTimeout(idle.current);
+      if (frame.current !== null) cancelAnimationFrame(frame.current);
+      frame.current = null;
+      paint();
+      const current = view.current;
+      setPan((previous) =>
+        previous.x === current.pan.x && previous.y === current.pan.y ? previous : current.pan,
+      );
+      setZoom(current.zoom);
+      if (moved.current || viewport.current?.hasAttribute('data-ink-preview'))
+        setSettled((v) => v + 1);
+      if (moved.current) {
+        moved.current = false;
+        if (focusPage) settleStack(current);
+      }
+    },
+    [paint, setZoom, settleStack, stopCoast, viewport],
+  );
+  const coast = useCallback(
+    (velocity: Offset) => {
+      const { zoom, pan } = view.current;
+      const reachable = limit({ x: pan.x + velocity.x * 32, y: pan.y + velocity.y * 32 }, zoom);
+      const speed = Math.hypot(velocity.x, velocity.y);
+      if ((reachable.x === pan.x && reachable.y === pan.y) || speed === 0) return false;
+      begin();
+      if (frame.current !== null) cancelAnimationFrame(frame.current);
+      frame.current = null;
+      coastSpeed.current = speed;
+      paint();
+      const start = performance.now();
+      const damping = 250;
+      const advance = (now: number) => {
+        const elapsed = now - start;
+        if (elapsed <= 0) {
+          coastFrame.current = requestAnimationFrame(advance);
+          return;
+        }
+        const remaining = Math.exp(-elapsed / damping);
+        coastSpeed.current = speed * remaining;
+        const distance = damping * (1 - remaining);
+        const next = limit(
+          { x: pan.x + velocity.x * distance, y: pan.y + velocity.y * distance },
+          zoom,
+        );
+        if (!applyView(zoom, next) || coastSpeed.current < 0.055 || elapsed > 1100) {
+          commit();
+          return;
+        }
+        paint();
+        coastFrame.current = requestAnimationFrame(advance);
+      };
+      coastFrame.current = requestAnimationFrame(advance);
+      return true;
+    },
+    [applyView, begin, commit, limit, paint],
+  );
   const commitSoon = useCallback(() => {
     clearTimeout(idle.current);
-    idle.current = setTimeout(commit, 120);
+    idle.current = setTimeout(() => commit(), 120);
   }, [commit]);
   useLayoutEffect(() => {
     const changed = previousPage.current !== pageId;
     if (frame.current !== null) cancelAnimationFrame(frame.current);
     frame.current = null;
     if (changed) {
+      stopCoast();
       const carriedPan = takePagePan(pageId);
       if (!carriedPan) clearDetail();
       previousPage.current = pageId;
@@ -230,26 +294,35 @@ export function usePageViewport({
       const pan = carriedPan ?? { x: 0, y: 0 };
       view.current = { zoom, pan };
       setPan(pan);
-    } else if (!interacting.current) {
-      view.current = { zoom, pan: limit(view.current.pan, zoom) };
-      setPan((p) =>
-        p.x === view.current.pan.x && p.y === view.current.pan.y ? p : { ...view.current.pan },
-      );
+    } else {
+      if (stopCoast()) {
+        interacting.current = false;
+        moved.current = false;
+        setSettled((v) => v + 1);
+      }
+      if (!interacting.current) {
+        view.current = { zoom, pan: limit(view.current.pan, zoom) };
+        setPan((p) =>
+          p.x === view.current.pan.x && p.y === view.current.pan.y ? p : { ...view.current.pan },
+        );
+      }
     }
     paint();
-  }, [pageId, zoom, limit, paint, clearDetail, takePagePan]);
+  }, [pageId, zoom, limit, paint, clearDetail, takePagePan, stopCoast]);
   useEffect(
     () => () => {
       if (frame.current !== null) cancelAnimationFrame(frame.current);
       clearTimeout(idle.current);
+      stopCoast();
       clearDetail();
     },
-    [clearDetail],
+    [clearDetail, stopCoast],
   );
   return {
     view,
     pan,
     interacting,
+    coastSpeed,
     rasterScale,
     settled,
     showDetail,
@@ -258,5 +331,7 @@ export function usePageViewport({
     move,
     commit,
     commitSoon,
+    coast,
+    stopCoast,
   };
 }

@@ -10,6 +10,8 @@ import { effectiveTool, PalmGuard } from './input';
 import type { InkPriority, PencilTool } from './input';
 import { clampPageZoom, usePageViewport } from './usePageViewport';
 import type { PageView } from './usePageViewport';
+import { panVelocity, recordPan } from './touch-momentum';
+import type { PanHistory } from './touch-momentum';
 import { useInkLayer } from './useInkLayer';
 import { usePdfDetail } from './usePdfDetail';
 import { usePageStack } from './usePageStack';
@@ -130,6 +132,7 @@ export default function Stage({
     client: { x: number; y: number };
     original: Stroke[];
     pan: { x: number; y: number };
+    panHistory?: PanHistory;
     points: Point[];
     paperRect: DOMRect;
     stroke?: Stroke;
@@ -160,6 +163,8 @@ export default function Stage({
     lastY: number;
     pan: { x: number; y: number };
     panning: boolean;
+    history: PanHistory;
+    interrupted: boolean;
   } | null>(null);
   const tap = useRef<{
     ids: Set<number>;
@@ -186,6 +191,7 @@ export default function Stage({
     view,
     pan,
     interacting,
+    coastSpeed,
     rasterScale,
     settled,
     showDetail,
@@ -194,7 +200,10 @@ export default function Stage({
     move: moveView,
     commit: commitView,
     commitSoon,
+    coast,
+    stopCoast,
   } = usePageViewport({
+    viewport,
     paper,
     backdrop,
     detail,
@@ -215,6 +224,10 @@ export default function Stage({
   });
   const penBusy = inkPriority.isBusy;
   const pdfBusy = useCallback(() => interacting.current || penBusy(), [interacting, penBusy]);
+  const stackPdfBusy = useCallback(
+    () => (interacting.current && coastSpeed.current === 0) || penBusy(),
+    [coastSpeed, interacting, penBusy],
+  );
   const livePdfBusy = useCallback(() => penBusy() || preparingInk.current(), [penBusy]);
   observePdf.current = usePdfDetail({
     page,
@@ -249,6 +262,7 @@ export default function Stage({
     pan,
     settled,
     interacting,
+    coastSpeed,
     working,
     lasso,
     neighbors: stack.nearby,
@@ -326,9 +340,19 @@ export default function Stage({
       stylusContact.current = null;
       clearInkGesture();
     };
+    const stopOutsideStage = (e: PointerEvent | KeyboardEvent) => {
+      if (coastSpeed.current && e.target instanceof Node && !viewport.current?.contains(e.target))
+        flushSync(() => commitView());
+    };
     window.addEventListener('blur', reset);
-    return () => window.removeEventListener('blur', reset);
-  }, [commitView, clearInkGesture]);
+    window.addEventListener('pointerdown', stopOutsideStage, true);
+    window.addEventListener('keydown', stopOutsideStage, true);
+    return () => {
+      window.removeEventListener('blur', reset);
+      window.removeEventListener('pointerdown', stopOutsideStage, true);
+      window.removeEventListener('keydown', stopOutsideStage, true);
+    };
+  }, [commitView, clearInkGesture, coastSpeed]);
   useEffect(() => {
     setSelection([]);
     setLasso([]);
@@ -595,6 +619,11 @@ export default function Stage({
     onNavigate(dx < 0 ? 1 : -1);
     return true;
   };
+  const finishPan = (history: PanHistory | undefined, releasedAt: number) => {
+    const velocity = history && panVelocity(history, releasedAt);
+    if (velocity && coast(velocity)) return;
+    if (interacting.current) commitView();
+  };
   const startPinch = (a: Position, b: Position): Pinch => {
     const { zoom, pan } = view.current;
     const r = viewport.current!.getBoundingClientRect();
@@ -686,6 +715,10 @@ export default function Stage({
       start: p,
       client: { x: e.clientX, y: e.clientY },
       pan,
+      ...(kind === 'pan' &&
+        e.pointerType === 'touch' && {
+          panHistory: [{ ...pan, time: e.timeStamp }],
+        }),
       original: page.strokes,
       points: [p],
       paperRect,
@@ -759,10 +792,12 @@ export default function Stage({
       if (Math.hypot(e.clientX - g.client.x, e.clientY - g.client.y) >= 5) g.moved = true;
       if (tool === 'select' && e.pointerType === 'touch' && !g.moved) return;
       if (!interacting.current) beginView();
-      moveView(
-        view.current.zoom,
-        limit({ x: g.pan.x + e.clientX - g.client.x, y: g.pan.y + e.clientY - g.client.y }),
-      );
+      const next = limit({
+        x: g.pan.x + e.clientX - g.client.x,
+        y: g.pan.y + e.clientY - g.client.y,
+      });
+      moveView(view.current.zoom, next);
+      if (g.panHistory) recordPan(g.panHistory, next, e.timeStamp);
       return;
     }
     if (g.kind === 'laser') {
@@ -810,7 +845,30 @@ export default function Stage({
     const g = gesture.current;
     if (!g || g.id !== e.pointerId) return;
     gesture.current = null;
-    if (g.kind === 'pan' && interacting.current) commitView();
+    if (g.kind === 'pan') {
+      if (cancel || g.pointerType !== 'touch') {
+        if (interacting.current) commitView();
+      } else {
+        const dx = e.clientX - g.client.x;
+        const dy = e.clientY - g.client.y;
+        const stationary = !g.moved && Math.hypot(dx, dy) < 5;
+        if (
+          g.playbackTap &&
+          g.playbackTap === playingVideo &&
+          stationary &&
+          performance.now() - g.started < 500
+        ) {
+          closePlayback(g.playbackTap);
+          setSelectedVideo(g.playbackTap);
+          if (interacting.current) commitView();
+        } else if (tool === 'select' && stationary) {
+          selectAt(g.start, g.original);
+          if (interacting.current) commitView();
+        } else if (!turnBySwipe(dx, dy)) finishPan(g.panHistory, e.timeStamp);
+      }
+      clearInkGesture();
+      return;
+    }
     if (g.kind === 'draw' && (!cancel || (g.pointerType === 'pen' && g.points.length > 1))) {
       // Lift-off coordinates can already belong to hover or the next stroke.
       onChange({
@@ -837,21 +895,6 @@ export default function Stage({
         if (g.points.every((p) => Math.hypot(p.x - g.start.x, p.y - g.start.y) < radius)) {
           selectAt(g.start, g.original);
         } else setSelection(lassoStrokes(g.original, g.points).map((stroke) => stroke.id));
-      }
-      if (g.kind === 'pan' && g.pointerType === 'touch') {
-        const dx = e.clientX - g.client.x,
-          dy = e.clientY - g.client.y;
-        const stationary = !g.moved && Math.hypot(dx, dy) < 5;
-        if (
-          g.playbackTap &&
-          g.playbackTap === playingVideo &&
-          stationary &&
-          performance.now() - g.started < 500
-        ) {
-          closePlayback(g.playbackTap);
-          setSelectedVideo(g.playbackTap);
-        } else if (tool === 'select' && stationary) selectAt(g.start, g.original);
-        else turnBySwipe(dx, dy);
       }
     }
     clearInkGesture();
@@ -921,7 +964,9 @@ export default function Stage({
       ref={viewport}
       data-testid="stage"
       onPointerDownCapture={(e) => {
+        const target = e.target as Element;
         if (e.pointerType === 'pen') {
+          stopCoast();
           swipe.current = null;
           nativePinch.current = null;
           const g = gesture.current;
@@ -930,7 +975,7 @@ export default function Stage({
             gesture.current = null;
             clearInkGesture();
           }
-          if (interacting.current) commitView();
+          if (interacting.current) commitView(false);
           palm.current.penDown(e.pointerId, performance.now());
           touches.current.clear();
           pinch.current = null;
@@ -949,8 +994,17 @@ export default function Stage({
           e.preventDefault();
           e.stopPropagation();
           return;
+        } else if (
+          stopCoast() &&
+          (e.pointerType !== 'touch' ||
+            fingerInk ||
+            tool === 'laser' ||
+            tool === 'select' ||
+            target.closest('.video-box,[data-video-control],[data-selection-control]'))
+        ) {
+          commitView(false);
         }
-        if (selectedVideo && !(e.target as Element).closest('.video-box,[data-video-control]'))
+        if (selectedVideo && !target.closest('.video-box,[data-video-control]'))
           setSelectedVideo(null);
       }}
       onPointerMoveCapture={(e) => {
@@ -1052,6 +1106,7 @@ export default function Stage({
           palm.current.blocksNavigation(performance.now(), palmRejection)
         ) {
           swipe.current = null;
+          if (stopCoast()) commitView(false);
           return;
         }
         const t = e.touches[0] as (typeof e.touches)[0] & {
@@ -1079,6 +1134,8 @@ export default function Stage({
           lastY: t.clientY,
           pan,
           panning: false,
+          history: [{ ...pan, time: e.timeStamp }],
+          interrupted: stopCoast(),
         };
       }}
       onTouchMove={(e) => {
@@ -1146,13 +1203,12 @@ export default function Stage({
         if (t) {
           g.lastX = t.clientX;
           g.lastY = t.clientY;
-          if (stack.active && gesture.current?.kind !== 'pan') {
+          if (!gesture.current && (stack.active || view.current.zoom > 1 || fitWidth)) {
             if (!interacting.current) beginView();
             g.panning = true;
-            moveView(
-              view.current.zoom,
-              limit({ x: g.pan.x + t.clientX - g.x, y: g.pan.y + t.clientY - g.y }),
-            );
+            const next = limit({ x: g.pan.x + t.clientX - g.x, y: g.pan.y + t.clientY - g.y });
+            moveView(view.current.zoom, next);
+            recordPan(g.history, next, e.timeStamp);
           }
         }
       }}
@@ -1178,19 +1234,20 @@ export default function Stage({
         const t = Array.from(e.changedTouches).find((t) => t.identifier === g.id);
         if (!t) return;
         swipe.current = null;
-        if (g.panning) {
-          if (interacting.current) commitView();
+        if (palm.current.blocksNavigation(performance.now(), palmRejection)) {
+          if ((g.panning || g.interrupted) && interacting.current) commitView();
           return;
         }
-        if (!palm.current.blocksNavigation(performance.now(), palmRejection))
-          turnBySwipe((t.clientX || g.lastX) - g.x, (t.clientY || g.lastY) - g.y);
+        const turned = turnBySwipe((t.clientX || g.lastX) - g.x, (t.clientY || g.lastY) - g.y);
+        if (!turned && (g.panning || g.interrupted)) finishPan(g.history, e.timeStamp);
       }}
       onTouchCancel={(e) => {
         if (Array.from(e.changedTouches).some((t) => t.identifier === stylusContact.current)) {
           stylusContact.current = null;
           return;
         }
-        if (swipe.current?.panning && interacting.current) commitView();
+        if ((swipe.current?.panning || swipe.current?.interrupted) && interacting.current)
+          commitView();
         swipe.current = null;
         if (nativePinch.current) {
           if (interacting.current) commitView();
@@ -1243,6 +1300,7 @@ export default function Stage({
                 fit={item.fit}
                 active={item.page.id === page.id}
                 shouldPause={pdfBusy}
+                shouldPausePdf={stackPdfBusy}
               />
             </div>
           ))}
