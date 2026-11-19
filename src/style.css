@@ -1934,17 +1934,6 @@ body,
 .ink-settings {
   gap: 3px;
 }
-.pen-kind-select {
-  flex-shrink: 0;
-  min-height: 44px;
-  width: 86px;
-  padding-inline: 5px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: #fff;
-  color: var(--green);
-  font-size: 12px;
-}
 .settings-dropdown {
   max-height: calc(var(--app-height, 100dvh) - 180px);
   overflow: auto;

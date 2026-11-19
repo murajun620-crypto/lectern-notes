@@ -39,7 +39,7 @@ import {
   ArrowUpRight,
 } from 'lucide-react';
 import type { Page, Project, Stroke, Tool } from './model';
-import { blankPage, clamp, drawStrokes, isPenKind, parseYoutubeUrl, penKinds, uid } from './model';
+import { blankPage, clamp, drawStrokes, parseYoutubeUrl, uid } from './model';
 import {
   deleteProject,
   download,
@@ -50,13 +50,7 @@ import {
 } from './storage';
 import { demoFile, exportPdf, importPdf, releasePdfs, renderPage } from './pdf';
 import Stage from './Stage';
-import {
-  createInkPriority,
-  highlighterWidths,
-  loadInputPreferences,
-  penKindLabels,
-  penWidths,
-} from './input';
+import { createInkPriority, highlighterWidths, loadInputPreferences, penWidths } from './input';
 import type { PencilTool } from './input';
 import { createInkControlGuard } from './ink-control-guard';
 import { createPencilDiagnostics } from './pencil-diagnostics';
@@ -1044,24 +1038,6 @@ export default function App() {
             </button>
             <div className="toolbar-divider" />
             <div className="ink-settings">
-              {widthTool === 'pen' && (
-                <select
-                  className="pen-kind-select"
-                  aria-label="ペンの種類"
-                  title="ペンの種類"
-                  value={preferences.penKind}
-                  onChange={(e) => {
-                    const penKind = e.target.value;
-                    if (isPenKind(penKind)) setPreferences((p) => ({ ...p, penKind }));
-                  }}
-                >
-                  {penKinds.map((kind) => (
-                    <option key={kind} value={kind}>
-                      {penKindLabels[kind]}
-                    </option>
-                  ))}
-                </select>
-              )}
               <label className="color-picker" title={`${palette.label}の色`}>
                 <input
                   type="color"
@@ -1381,7 +1357,6 @@ export default function App() {
                   }
                   onFocusPage={focusPage}
                   tool={tool}
-                  penKind={preferences.penKind}
                   color={color}
                   width={width}
                   laserWidth={preferences.laserWidth}

@@ -1,5 +1,4 @@
-import { isPenKind } from './model';
-import type { PenKind, Tool } from './model';
+import type { Tool } from './model';
 
 /** Leave a short window between letters for the next stroke to take priority. */
 export function createInkPriority() {
@@ -24,12 +23,6 @@ export type InkPriority = ReturnType<typeof createInkPriority>;
 export type PencilTool = Exclude<Tool, 'hand'>;
 export const penWidths = [1, 2.5, 4, 7, 10];
 export const highlighterWidths = [5, 12.5, 20, 35, 50];
-export const penKindLabels: Record<PenKind, string> = {
-  ballpoint: 'ボールペン',
-  fountain: '万年筆',
-  pencil: '鉛筆',
-  brush: '筆ペン',
-};
 export type InputPreferences = {
   fingerInk: boolean;
   pencilPressure: boolean;
@@ -39,7 +32,6 @@ export type InputPreferences = {
   pageMode: 'continuous' | 'single';
   presets: string[];
   highlighterPresets: string[];
-  penKind: PenKind;
   penWidth: number;
   highlighterWidth: number;
   laserWidth: number;
@@ -54,7 +46,6 @@ export const defaultInputPreferences: InputPreferences = {
   pageMode: 'continuous',
   presets: ['#183e3a', '#cf4d44', '#447cbd'],
   highlighterPresets: ['#fff200', '#ff45bf', '#a6ff00'],
-  penKind: 'ballpoint',
   penWidth: 2.5,
   highlighterWidth: 12.5,
   laserWidth: 4,
@@ -78,7 +69,6 @@ export function loadInputPreferences(): InputPreferences {
       twoFingerTap: p.twoFingerTap !== false,
       showFooter: p.showFooter !== false,
       pageMode: p.pageMode === 'single' ? 'single' : 'continuous',
-      penKind: isPenKind(p.penKind) ? p.penKind : defaultInputPreferences.penKind,
       penWidth: penWidths.includes(p.penWidth) ? p.penWidth : defaultInputPreferences.penWidth,
       highlighterWidth: highlighterWidths.includes(p.highlighterWidth)
         ? p.highlighterWidth

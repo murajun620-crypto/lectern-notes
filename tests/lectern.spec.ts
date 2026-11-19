@@ -316,7 +316,6 @@ test('backup restore, annotated PDF output and library rename/duplicate/delete',
   page,
 }) => {
   await demo(page);
-  await page.getByLabel('ペンの種類', { exact: true }).selectOption('pencil');
   await line(page);
   await page.getByRole('button', { name: 'YouTube挿入' }).click();
   await page.getByLabel('YouTube URL').fill('https://youtu.be/M7lc1UVf-VE');
@@ -332,7 +331,7 @@ test('backup restore, annotated PDF output and library rename/duplicate/delete',
   expect(meta.version).toBe(2);
   expect(meta.project.pages).toHaveLength(3);
   expect(meta.project.pages[0].strokes).toHaveLength(1);
-  expect(meta.project.pages[0].strokes[0].penKind).toBe('pencil');
+  expect(meta.project.pages[0].strokes[0]).not.toHaveProperty('penKind');
   expect(meta.project.pages[0].videos).toHaveLength(1);
   expect(Object.keys(zip.files).some((name) => name.endsWith('.pdf'))).toBe(true);
   await page.locator('.export-menu>summary').click();
@@ -346,6 +345,8 @@ test('backup restore, annotated PDF output and library rename/duplicate/delete',
   await expect(page.getByRole('heading', { name: '講義資料' })).toBeVisible();
   const chooser = page.waitForEvent('filechooser');
   await page.getByRole('button', { name: 'バックアップを復元' }).click();
+  const legacyStroke = { ...meta.project.pages[0].strokes[0], penKind: 'pencil' };
+  meta.project.pages[0].strokes = [legacyStroke];
   zip.file('project.json', JSON.stringify({ ...meta, version: 1 }));
   await (
     await chooser
@@ -358,10 +359,9 @@ test('backup restore, annotated PDF output and library rename/duplicate/delete',
   await saved(page);
   const restored = await stored(page);
   expect(restored).toHaveLength(2);
-  expect(restored.map((project) => project.pages[0].strokes[0].penKind)).toEqual([
-    'pencil',
-    'pencil',
-  ]);
+  expect(restored.map((project) => project.pages[0].strokes[0])).toEqual(
+    expect.arrayContaining([legacyStroke]),
+  );
   await page.getByRole('button', { name: 'ライブラリに戻る' }).click();
   await page.locator('.card-menu>summary').first().click();
   await page.getByRole('button', { name: '名前を変更' }).first().click();

@@ -697,21 +697,25 @@ test.describe('Pencil contact samples', () => {
     expect(await writes()).toEqual([4]);
   });
 
-  test('fast short marks with every pen survive batching, render, and save without lift-off lines', async ({
+  test('fast short marks survive batching, render, and save without lift-off lines', async ({
     page,
   }) => {
+    await page.addInitScript(() => {
+      if (!localStorage.getItem('lectern.input'))
+        localStorage.setItem('lectern.input', JSON.stringify({ penKind: 'brush' }));
+    });
     await demo(page);
+    await expect(page.getByLabel('ペンの種類', { exact: true })).toHaveCount(0);
     await page.getByLabel('ペンの太さ', { exact: true }).selectOption('4');
     await page.getByLabel('入力設定', { exact: true }).click();
     await page.getByLabel('Pencilの筆圧で線の太さを変える').check();
     await page.getByLabel('入力設定', { exact: true }).click();
     const stage = page.getByTestId('stage');
     const paper = (await page.getByTestId('pdf-page').boundingBox())!;
-    const kinds = ['ballpoint', 'fountain', 'pencil', 'brush'];
+    const rows = 4;
     const x = Math.round(paper.x + paper.width * 0.28);
     const y = Math.round(paper.y + paper.height * 0.35);
-    for (const [row, kind] of kinds.entries()) {
-      await page.getByLabel('ペンの種類', { exact: true }).selectOption(kind);
+    for (let row = 0; row < rows; row++) {
       await stage.evaluate(
         (el, position) => {
           HTMLElement.prototype.setPointerCapture = () => {};
@@ -740,13 +744,13 @@ test.describe('Pencil contact samples', () => {
         { x, y: y + row * 28 },
       );
     }
-    const expected = kinds.flatMap((kind) => [4, 4, 4, 1].map((count) => [kind, count]));
+    const expected = Array.from({ length: rows }, () => [4, 4, 4, 1]).flat();
     const savedMarks = async () => {
       const project = (await stored(page))[0];
-      return project?.pages[0].strokes.map((s: { penKind: string; points: unknown[] }) => [
-        s.penKind,
-        s.points.length,
-      ]);
+      const strokes = project?.pages[0].strokes as
+        { penKind?: string; points: unknown[] }[] | undefined;
+      expect(strokes?.some((s) => s.penKind !== undefined)).not.toBe(true);
+      return strokes?.map((s) => s.points.length);
     };
     await expect.poll(savedMarks).toEqual(expected);
     const sampleInk = () =>
@@ -762,7 +766,7 @@ test.describe('Pencil contact samples', () => {
           };
           const marks: number[] = [];
           const afterLift: number[] = [];
-          for (let row = 0; row < 4; row++) {
+          for (let row = 0; row < position.rows; row++) {
             for (let col = 0; col < 4; col++) {
               const x = position.x + col * 24;
               const y = position.y + row * 28;
@@ -772,7 +776,7 @@ test.describe('Pencil contact samples', () => {
           }
           return { marks: Math.min(...marks), afterLift: Math.max(...afterLift) };
         },
-        { x, y },
+        { x, y, rows },
       );
     const checkInk = async () => {
       await expect.poll(async () => (await sampleInk()).marks).toBeGreaterThan(40);
@@ -1216,9 +1220,6 @@ test('iPad-sized layout keeps editing controls and ink palettes in the fullscree
   await expect(page.getByLabel('ペンの色', { exact: true })).toHaveValue('#00aa55');
   await page.getByRole('button', { name: '全画面表示', exact: true }).click();
   await expect(page.locator('.app')).toHaveClass(/is-fullscreen/);
-  const kindBox = (await page.getByLabel('ペンの種類', { exact: true }).boundingBox())!;
-  expect(kindBox.height).toBeGreaterThanOrEqual(44);
-  expect(kindBox.x + kindBox.width).toBeLessThanOrEqual(1010);
   await expect(page.getByRole('button', { name: '選択', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'YouTube挿入' })).toBeVisible();
   const documents = page.getByRole('button', { name: '資料メニュー', exact: true });
@@ -1281,55 +1282,6 @@ test('iPad-sized layout keeps editing controls and ink palettes in the fullscree
   await highlighter.click();
   await expect(highlighterWidth).toHaveValue('35');
   await expect(swatch('蛍光ペン', 2)).toHaveCSS('--swatch', '#ff7a20');
-});
-
-test('pen kinds can be mixed on a page and keep their appearance when reopened', async ({
-  page,
-}) => {
-  await page.setViewportSize({ width: 1024, height: 768 });
-  await demo(page);
-  await page.getByLabel('ページ表示').selectOption('single');
-  const selector = page.getByLabel('ペンの種類', { exact: true });
-  await expect(selector.locator('option')).toHaveText(['ボールペン', '万年筆', '鉛筆', '筆ペン']);
-  await expect(selector).toHaveValue('ballpoint');
-  await page.getByLabel('ペンの太さ', { exact: true }).selectOption('7');
-  const pdf = page.getByTestId('pdf-page');
-  const paper = (await pdf.boundingBox())!;
-  const alphaAt = (x: number, y: number) =>
-    page.getByTestId('ink-canvas').evaluate(
-      (c: HTMLCanvasElement, at) => {
-        const box = c.getBoundingClientRect();
-        const px = Math.round(((at.x - box.left) * c.width) / box.width);
-        const py = Math.round(((at.y - box.top) * c.height) / box.height);
-        return c.getContext('2d')!.getImageData(px, py, 1, 1).data[3];
-      },
-      { x, y },
-    );
-  const kinds = ['ballpoint', 'fountain', 'pencil', 'brush'];
-  const lineY = (i: number) => paper.y + paper.height * (0.3 + 0.13 * i);
-  const x = paper.x + paper.width * 0.49;
-  for (const [i, kind] of kinds.entries()) {
-    await selector.selectOption(kind);
-    await page.mouse.move(paper.x + paper.width * 0.23, lineY(i));
-    await page.mouse.down();
-    await page.mouse.move(paper.x + paper.width * 0.72, lineY(i), { steps: 16 });
-    await page.mouse.up();
-    await expect.poll(() => alphaAt(x, lineY(i))).toBeGreaterThan(50);
-  }
-  expect(await alphaAt(x, lineY(0))).toBe(255);
-  const pencilAlpha = await alphaAt(x, lineY(2));
-  expect(pencilAlpha).toBeLessThan(230);
-  const penKinds = async () =>
-    (await stored(page))[0].pages[0].strokes.map((s: { penKind: string }) => s.penKind);
-  await expect.poll(penKinds).toEqual(kinds);
-  await page.getByRole('button', { name: '蛍光ペン', exact: true }).click();
-  await expect(selector).toHaveCount(0);
-  await page.getByRole('button', { name: 'ペン', exact: true }).click();
-  await expect(selector).toHaveValue('brush');
-  await page.reload();
-  await expect(selector).toHaveValue('brush');
-  await expect.poll(penKinds).toEqual(kinds);
-  await expect.poll(() => alphaAt(x, lineY(2))).toBe(pencilAlpha);
 });
 
 test('a small Shorts placement plays upright at the saved size and can enlarge on demand', async ({

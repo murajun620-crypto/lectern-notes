@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import type { PointerEvent as ReactPointerEvent } from 'react';
 import { flushSync } from 'react-dom';
 import { drawLaser, strokeHit, transformStroke, uid } from './model';
-import type { Page, PenKind, Point, Stroke, Tool, Video } from './model';
+import type { Page, Point, Stroke, Tool, Video } from './model';
 import { renderPage } from './pdf';
 import VideoBox from './VideoBox';
 import type { RegisterPlayback } from './VideoBox';
@@ -64,7 +64,6 @@ type Props = {
   continuousPages?: Page[];
   onFocusPage: (id: string) => void;
   tool: Tool;
-  penKind: PenKind;
   color: string;
   width: number;
   laserWidth: number;
@@ -93,7 +92,6 @@ export default function Stage({
   continuousPages,
   onFocusPage,
   tool,
-  penKind,
   color,
   width,
   laserWidth,
@@ -826,7 +824,6 @@ export default function Stage({
       const s: Stroke = {
         id: uid(),
         tool: selectedTool as 'pen' | 'highlighter',
-        ...(selectedTool === 'pen' && { penKind }),
         color,
         width,
         points: gesture.current.points,

@@ -9,6 +9,7 @@ export type Erasure = { id: string; width: number; points: Point[] };
 export type Stroke = {
   id: string;
   tool: 'pen' | 'highlighter';
+  /** Retained to render strokes written before the pen selector was removed. */
   penKind?: PenKind;
   color: string;
   width: number;
