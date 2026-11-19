@@ -349,6 +349,13 @@ export default function App() {
       p ? { ...p, currentPage: clamp(p.currentPage + delta, 0, p.pages.length - 1) } : p,
     );
   }, []);
+  const focusPage = useCallback((id: string) => {
+    setProject((p) => {
+      if (!p || p.pages[p.currentPage]?.id === id) return p;
+      const currentPage = p.pages.findIndex((item) => item.id === id);
+      return currentPage < 0 ? p : { ...p, currentPage };
+    });
+  }, []);
   const undoRedo = useCallback((redo = false) => {
     const p = current.current;
     if (!p) return;
@@ -1048,20 +1055,16 @@ export default function App() {
             </details>
             {lecture && (
               <>
-                {page?.videos.map((video, i) => {
-                  const key = `${page.id}:${video.id}`;
-                  const actions = lecturePlayback[key];
+                {Object.entries(lecturePlayback).map(([key, actions], i) => {
                   return (
-                    actions && (
-                      <div
-                        key={key}
-                        className="lecture-video-actions"
-                        role="group"
-                        aria-label={`動画${i + 1}の操作`}
-                      >
-                        <PlaybackButtons actions={actions} />
-                      </div>
-                    )
+                    <div
+                      key={key}
+                      className="lecture-video-actions"
+                      role="group"
+                      aria-label={`動画${i + 1}の操作`}
+                    >
+                      <PlaybackButtons actions={actions} />
+                    </div>
                   );
                 })}
                 <span
@@ -1137,7 +1140,12 @@ export default function App() {
             <div className="canvas-area">
               {page && (
                 <Stage
+                  key={`${project.id}:${preferences.pageMode}`}
                   page={page}
+                  continuousPages={
+                    preferences.pageMode === 'continuous' ? project.pages : undefined
+                  }
+                  onFocusPage={focusPage}
                   tool={tool}
                   color={color}
                   width={width}
@@ -1196,7 +1204,9 @@ export default function App() {
                 <span className="footer-hint">
                   {tool === 'hand'
                     ? '動画の上部で移動・右下でサイズ変更'
-                    : 'Pencilで書く、指でめくる'}
+                    : preferences.pageMode === 'continuous'
+                      ? 'Pencilで書く、指で上下にスクロール'
+                      : 'Pencilで書く、指でめくる'}
                 </span>
               )}
             </span>
@@ -1235,6 +1245,20 @@ export default function App() {
               </IconButton>
             </div>
             <div className="zoom-control">
+              <select
+                aria-label="ページ表示"
+                title="ページ表示"
+                value={preferences.pageMode}
+                onChange={(e) =>
+                  setPreferences((p) => ({
+                    ...p,
+                    pageMode: e.target.value === 'single' ? 'single' : 'continuous',
+                  }))
+                }
+              >
+                <option value="continuous">連続</option>
+                <option value="single">1ページずつ</option>
+              </select>
               <select
                 aria-label="表示方法"
                 value={fitWidth ? 'width' : 'page'}

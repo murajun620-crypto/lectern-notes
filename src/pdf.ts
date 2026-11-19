@@ -118,24 +118,33 @@ export async function exportPdf(project: Project, progress: (s: string) => void)
     // Export a clickable link placeholder for videos; editable geometry lives in the backup.
     if (pg.videos.length) {
       for (const v of pg.videos) {
+        const left = Math.max(0, v.x);
+        const top = Math.max(0, v.y);
+        const right = Math.min(pg.width, v.x + v.width);
+        const bottom = Math.min(pg.height, v.y + v.height);
+        if (right <= left || bottom <= top) continue;
+        const width = right - left,
+          height = bottom - top;
         out.drawRectangle({
-          x: v.x,
-          y: pg.height - v.y - v.height,
-          width: v.width,
-          height: v.height,
+          x: left,
+          y: pg.height - bottom,
+          width,
+          height,
           color: rgb(0.09, 0.16, 0.15),
           opacity: 0.95,
         });
-        out.drawText('YouTube / Open video', {
-          x: v.x + 12,
-          y: pg.height - v.y - v.height / 2,
-          size: Math.min(14, v.width / 16),
-          color: rgb(1, 1, 1),
-        });
+        const labelSize = Math.min(14, width / 16, height / 2);
+        if (labelSize >= 4)
+          out.drawText('YouTube / Open video', {
+            x: left + labelSize,
+            y: pg.height - bottom + (height - labelSize) / 2,
+            size: labelSize,
+            color: rgb(1, 1, 1),
+          });
         const link = doc.context.obj({
           Type: 'Annot',
           Subtype: 'Link',
-          Rect: [v.x, pg.height - v.y - v.height, v.x + v.width, pg.height - v.y],
+          Rect: [left, pg.height - bottom, right, pg.height - top],
           Border: [0, 0, 0],
           A: {
             Type: 'Action',

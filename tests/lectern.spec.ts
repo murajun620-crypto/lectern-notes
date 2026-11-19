@@ -252,6 +252,17 @@ test('YouTube placement, API integration, playback error, lecture lock and persi
   await page.mouse.up();
   await saved(page);
   expect((await stored(page))[0].pages[0].videos[0].width).toBeGreaterThan(after.width);
+  const paper = (await page.getByTestId('pdf-page').boundingBox())!;
+  const movedHandle = (await handle.boundingBox())!;
+  await page.mouse.move(movedHandle.x + 12, movedHandle.y + 10);
+  await page.mouse.down();
+  await page.mouse.move(paper.x + paper.width - 20, movedHandle.y + 10, { steps: 8 });
+  await page.mouse.up();
+  await saved(page);
+  const overhang = (await stored(page))[0].pages[0];
+  expect(overhang.videos[0].x + overhang.videos[0].width).toBeGreaterThan(overhang.width);
+  const placed = (await page.getByTestId('video-box').boundingBox())!;
+  expect(placed.x + placed.width).toBeGreaterThan(paper.x + paper.width);
   await page.getByRole('button', { name: '講義を始める' }).click();
   await expect(page.locator('.video-handle')).toHaveCount(0);
   await page.getByRole('button', { name: '動画をページ内で再生' }).click();
@@ -273,9 +284,10 @@ test('YouTube placement, API integration, playback error, lecture lock and persi
   await page.getByRole('button', { name: 'このページに追加' }).click();
   await saved(page);
   await page.reload();
-  await expect(page.getByTestId('video-box')).toBeVisible();
+  await expect(page.getByTestId('video-box')).toHaveCount(2);
   const restored = (await stored(page))[0];
   expect(restored.pages[0].videos).toHaveLength(1);
+  expect(restored.pages[0].videos[0]).toEqual(overhang.videos[0]);
   expect(restored.pages[1].videos).toHaveLength(1);
   await expect(page.getByLabel('ページ番号')).toHaveValue('2');
 });
@@ -351,6 +363,7 @@ test('touch navigation, pinch and pressure-bearing pen input in landscape', asyn
   });
   const page = await context.newPage();
   await demo(page);
+  await page.getByLabel('ページ表示').selectOption('single');
   const session = await context.newCDPSession(page);
   let r = (await page.getByTestId('pdf-page').boundingBox())!;
   const touch = async (

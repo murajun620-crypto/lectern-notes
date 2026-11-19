@@ -122,7 +122,10 @@ export function penOutline(stroke: Stroke, draft = false) {
     },
   );
 }
-export function traceCurve(ctx: CanvasRenderingContext2D, points: { x: number; y: number }[]) {
+export function traceCurve(
+  ctx: Pick<CanvasRenderingContext2D, 'moveTo' | 'quadraticCurveTo' | 'lineTo'>,
+  points: { x: number; y: number }[],
+) {
   if (!points.length) return;
   ctx.moveTo(points[0].x, points[0].y);
   for (let i = 1; i < points.length - 1; i++) {
@@ -191,38 +194,49 @@ function clipErasures(ctx: CanvasRenderingContext2D, erasures: Erasure[]) {
     }
   }
 }
+const savedStrokePaths = new WeakMap<Stroke, Path2D>();
+function strokePath(stroke: Stroke, draft: boolean) {
+  const cached = draft ? undefined : savedStrokePaths.get(stroke);
+  if (cached) return cached;
+  const path = new Path2D();
+  if (stroke.tool === 'highlighter') {
+    traceCurve(path, stroke.points);
+    if (stroke.points.length === 1) path.lineTo(stroke.points[0].x + 0.01, stroke.points[0].y);
+  } else {
+    const outline = penOutline(stroke, draft);
+    if (outline.length) {
+      const first = outline[0],
+        last = outline.at(-1)!;
+      path.moveTo((last[0] + first[0]) / 2, (last[1] + first[1]) / 2);
+      for (let i = 0; i < outline.length; i++) {
+        const p = outline[i],
+          next = outline[(i + 1) % outline.length];
+        path.quadraticCurveTo(p[0], p[1], (p[0] + next[0]) / 2, (p[1] + next[1]) / 2);
+      }
+      path.closePath();
+    }
+  }
+  if (!draft) savedStrokePaths.set(stroke, path);
+  return path;
+}
+
 export function drawStrokes(ctx: CanvasRenderingContext2D, strokes: Stroke[], draft = false) {
   for (const stroke of strokes) {
     if (!stroke.points.length) continue;
-    // One composited path per highlighter prevents dark joints inside a single stroke.
+    const path = strokePath(stroke, draft);
     ctx.save();
     if (stroke.erasures?.length) clipErasures(ctx, stroke.erasures);
-    ctx.strokeStyle = stroke.color;
-    ctx.fillStyle = stroke.color;
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
     if (stroke.tool === 'highlighter') {
+      // Composite one path so individual segments cannot leave darker joints.
       ctx.globalAlpha = 0.3;
+      ctx.strokeStyle = stroke.color;
       ctx.lineWidth = stroke.width;
-      ctx.beginPath();
-      traceCurve(ctx, stroke.points);
-      if (stroke.points.length === 1) ctx.lineTo(stroke.points[0].x + 0.01, stroke.points[0].y);
-      ctx.stroke();
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.stroke(path);
     } else {
-      const outline = penOutline(stroke, draft);
-      if (outline.length) {
-        const first = outline[0],
-          last = outline.at(-1)!;
-        ctx.beginPath();
-        ctx.moveTo((last[0] + first[0]) / 2, (last[1] + first[1]) / 2);
-        for (let i = 0; i < outline.length; i++) {
-          const p = outline[i],
-            next = outline[(i + 1) % outline.length];
-          ctx.quadraticCurveTo(p[0], p[1], (p[0] + next[0]) / 2, (p[1] + next[1]) / 2);
-        }
-        ctx.closePath();
-        ctx.fill();
-      }
+      ctx.fillStyle = stroke.color;
+      ctx.fill(path);
     }
     ctx.restore();
   }

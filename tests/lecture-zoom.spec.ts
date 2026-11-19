@@ -42,6 +42,49 @@ async function touch(
   );
 }
 
+test('defaults to continuous pages, scrolls between sheets and lets ink follow a visible neighbor', async ({
+  page,
+}) => {
+  await demo(page);
+  const mode = page.getByLabel('ページ表示');
+  await expect(mode).toHaveValue('continuous');
+  const stage = (await page.getByTestId('stage').boundingBox())!;
+  const first = (await page.getByTestId('pdf-page').boundingBox())!;
+  const sheet2 = page.locator('.stack-paper').nth(1);
+  await expect(sheet2).toHaveCount(1);
+  const x = stage.x + stage.width / 2;
+  const start = { identifier: 3, clientX: x, clientY: stage.y + stage.height * 0.75 };
+  const end = { ...start, clientY: start.clientY - first.height * 0.42 };
+  await touch(page, 'touchstart', [start]);
+  await touch(page, 'touchmove', [end]);
+  await touch(page, 'touchend', [], [end]);
+  await expect(page.getByTestId('stage')).not.toHaveAttribute('data-ink-preview');
+  await expect(page.getByLabel('ページ番号')).toHaveValue('1');
+  const second = (await sheet2.boundingBox())!;
+  expect(second.y).toBeGreaterThan(stage.y);
+  expect(second.y + 80).toBeLessThan(stage.y + stage.height);
+
+  await page.mouse.move(x, second.y + 45);
+  await page.mouse.down();
+  await page.mouse.move(x + 50, second.y + 60, { steps: 8 });
+  await page.mouse.up();
+  await expect(page.getByLabel('ページ番号')).toHaveValue('2');
+  const reanchored = (await page.getByTestId('pdf-page').boundingBox())!;
+  expect(reanchored.y).toBeCloseTo(second.y, 0);
+  await expect
+    .poll(async () => (await projects(page))[0].pages.map((p) => p.strokes.length))
+    .toEqual([0, 1, 0]);
+
+  await page.mouse.move(x, stage.y + stage.height * 0.5);
+  await page.mouse.wheel(0, -first.height);
+  await expect(page.getByLabel('ページ番号')).toHaveValue('1');
+  await mode.selectOption('single');
+  await expect(page.locator('.stack-board')).toHaveCount(0);
+  await page.reload();
+  await expect(mode).toHaveValue('single');
+  await expect(page.locator('.stack-board')).toHaveCount(0);
+});
+
 test('lecture has highlighter, no document header, and an independent persistent laser width', async ({
   page,
   browserName,
@@ -152,6 +195,8 @@ test('pinch scales cached layers without raster resizing or a loading overlay, t
     inkWidth,
   );
   expect(await page.evaluate(() => (window as any).__rasterChanges)).toEqual([]);
+  await expect(page.locator('.ink-page-preview')).toBeVisible();
+  await expect(page.getByTestId('ink-canvas')).toBeHidden();
   await touch(
     page,
     'touchend',
@@ -168,6 +213,8 @@ test('pinch scales cached layers without raster resizing or a loading overlay, t
     .poll(() => page.locator('.pdf-canvas').evaluate((c: HTMLCanvasElement) => c.width))
     .toBeGreaterThan(initial.w * 1.8);
   expect(await page.evaluate(() => (window as any).__rasterChanges.length)).toBe(2);
+  await expect(page.getByTestId('ink-canvas')).toBeVisible();
+  await expect(page.locator('.ink-page-preview')).toBeHidden();
   await expect(page.locator('.pdf-loading')).toHaveCount(0);
   const sharp = await page.locator('.pdf-canvas').evaluate((c: HTMLCanvasElement) => c.width);
   await page.getByLabel('表示倍率').selectOption('1');
@@ -313,5 +360,47 @@ test.describe('high-DPI PDF detail rendering', () => {
       .toBeCloseTo(1.25, 2);
     await touch(page, 'touchend', [], wider);
     await expect(zoom).toHaveValue('10');
+  });
+
+  test('draws pen and highlighter at native pixel density during and after writing at 1000%', async ({
+    page,
+  }) => {
+    await demo(page);
+    await page.getByLabel('表示倍率').selectOption('10');
+    const ink = page.getByTestId('ink-canvas');
+    const draft = page.locator('.ink-draft-canvas');
+    const stage = (await page.getByTestId('stage').boundingBox())!;
+    for (const layer of [ink, draft]) {
+      const box = (await layer.boundingBox())!;
+      const pixels = await layer.evaluate((c: HTMLCanvasElement) => [c.width, c.height]);
+      expect(box.width).toBeCloseTo(stage.width, 0);
+      expect(box.height).toBeCloseTo(stage.height, 0);
+      expect(pixels).toEqual([Math.round(box.width * 2), Math.round(box.height * 2)]);
+    }
+    const opacity = (layer: typeof ink, fractionY: number) =>
+      layer.evaluate(
+        (c: HTMLCanvasElement, y) =>
+          c.getContext('2d')!.getImageData(c.width >> 1, Math.floor(c.height * y), 1, 1).data[3],
+        fractionY,
+      );
+    const draw = async (fractionY: number) => {
+      const y = stage.y + stage.height * fractionY;
+      await page.mouse.move(stage.x + stage.width * 0.25, y);
+      await page.mouse.down();
+      await page.mouse.move(stage.x + stage.width * 0.75, y, { steps: 12 });
+    };
+    await page.getByLabel('ペンの太さ', { exact: true }).selectOption('1');
+    await draw(0.35);
+    await expect.poll(() => opacity(draft, 0.35)).toBeGreaterThan(240);
+    expect(await opacity(ink, 0.35)).toBe(0);
+    await page.mouse.up();
+    await expect.poll(() => opacity(ink, 0.35)).toBeGreaterThan(240);
+    await page.getByRole('button', { name: '蛍光ペン', exact: true }).click();
+    await page.getByLabel('蛍光ペンの太さ', { exact: true }).selectOption('5');
+    await draw(0.65);
+    await expect.poll(() => opacity(draft, 0.65)).toBeCloseTo(77, -1);
+    expect(await opacity(ink, 0.35)).toBeGreaterThan(240);
+    await page.mouse.up();
+    await expect.poll(() => opacity(ink, 0.65)).toBeCloseTo(77, -1);
   });
 });

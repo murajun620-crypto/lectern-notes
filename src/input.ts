@@ -7,6 +7,7 @@ export type InputPreferences = {
   fingerInk: boolean;
   palmRejection: boolean;
   twoFingerTap: boolean;
+  pageMode: 'continuous' | 'single';
   presets: string[];
   highlighterPresets: string[];
   penWidth: number;
@@ -18,6 +19,7 @@ export const defaultInputPreferences: InputPreferences = {
   fingerInk: false,
   palmRejection: true,
   twoFingerTap: true,
+  pageMode: 'continuous',
   presets: ['#183e3a', '#cf4d44', '#447cbd'],
   highlighterPresets: ['#fff200', '#ff45bf', '#a6ff00'],
   penWidth: 2.5,
@@ -40,6 +42,7 @@ export function loadInputPreferences(): InputPreferences {
       fingerInk: p.fingerInk === true,
       palmRejection: p.palmRejection !== false,
       twoFingerTap: p.twoFingerTap !== false,
+      pageMode: p.pageMode === 'single' ? 'single' : 'continuous',
       penWidth: penWidths.includes(p.penWidth) ? p.penWidth : defaultInputPreferences.penWidth,
       highlighterWidth: highlighterWidths.includes(p.highlighterWidth)
         ? p.highlighterWidth

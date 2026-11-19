@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { RefObject } from 'react';
 import { clamp } from './model';
+import type { VideoBounds } from './video-layout';
 
 type Offset = { x: number; y: number };
-type View = { zoom: number; pan: Offset };
+export type PageView = { zoom: number; pan: Offset };
 
 const maxPageZoom = 10;
 export const pageZoomSteps = [1, 1.25, 1.5, 2, 3, 4, 5, 6, 8, maxPageZoom];
@@ -22,10 +23,15 @@ export function usePageViewport({
   pageId,
   width,
   height,
+  contentBounds,
   size,
   fit,
   zoom,
   setZoom,
+  showInkPreview,
+  paintStack,
+  settleStack,
+  takePagePan,
 }: {
   paper: RefObject<HTMLDivElement | null>;
   backdrop: RefObject<HTMLDivElement | null>;
@@ -33,22 +39,28 @@ export function usePageViewport({
   pageId: string;
   width: number;
   height: number;
+  contentBounds: VideoBounds;
   size: { w: number; h: number };
   fit: number;
   zoom: number;
   setZoom: (z: number) => void;
+  showInkPreview: () => void;
+  paintStack: (view: PageView) => void;
+  settleStack: (view: PageView) => void;
+  takePagePan: (pageId: string) => Offset | undefined;
 }) {
   const [pan, setPan] = useState<Offset>({ x: 0, y: 0 });
   const [settled, setSettled] = useState(0);
-  const view = useRef<View>({ zoom, pan: { x: 0, y: 0 } });
+  const view = useRef<PageView>({ zoom, pan: { x: 0, y: 0 } });
   const detailView = useRef<{
-    view: View;
+    view: PageView;
     pageId: string;
     fit: number;
     w: number;
     h: number;
   } | null>(null);
   const interacting = useRef(false),
+    moved = useRef(false),
     frame = useRef<number | null>(null),
     idle = useRef<ReturnType<typeof setTimeout> | undefined>(undefined),
     previousPage = useRef(pageId);
@@ -63,22 +75,32 @@ export function usePageViewport({
     (next: Offset, z = view.current.zoom): Offset => ({
       x: clamp(
         next.x,
-        -Math.max(0, (width * fit * z - size.w + 40) / 2),
-        Math.max(0, (width * fit * z - size.w + 40) / 2),
+        Math.min(0, (size.w - 40) / 2 - (contentBounds.right - width / 2) * fit * z),
+        Math.max(0, (width / 2 - contentBounds.left) * fit * z - (size.w - 40) / 2),
       ),
       y: clamp(
         next.y,
-        -Math.max(0, (height * fit * z - size.h + 40) / 2),
-        Math.max(0, (height * fit * z - size.h + 40) / 2),
+        Math.min(0, (size.h - 40) / 2 - (contentBounds.bottom - height / 2) * fit * z),
+        Math.max(0, (height / 2 - contentBounds.top) * fit * z - (size.h - 40) / 2),
       ),
     }),
-    [width, height, fit, size],
+    [
+      width,
+      height,
+      fit,
+      size,
+      contentBounds.left,
+      contentBounds.right,
+      contentBounds.top,
+      contentBounds.bottom,
+    ],
   );
   const paint = useCallback(() => {
     const current = view.current;
     const transform = `translate3d(${current.pan.x}px, ${current.pan.y}px, 0) scale(${current.zoom})`;
     if (paper.current) paper.current.style.transform = transform;
     if (backdrop.current) backdrop.current.style.transform = `translate(-50%, -50%) ${transform}`;
+    paintStack(current);
     const layer = detail.current,
       previous = detailView.current;
     if (!layer || !previous) return;
@@ -97,7 +119,7 @@ export function usePageViewport({
     layer.style.visibility = 'visible';
     layer.style.transform =
       ratio === 1 && x === 0 && y === 0 ? '' : `translate3d(${x}px, ${y}px, 0) scale(${ratio})`;
-  }, [backdrop, detail, fit, pageId, paper, size.w, size.h]);
+  }, [backdrop, detail, fit, pageId, paper, paintStack, size.w, size.h]);
   const showDetail = useCallback(
     (canvas: HTMLCanvasElement) => {
       const layer = detail.current;
@@ -122,14 +144,19 @@ export function usePageViewport({
   }, []);
   const move = useCallback(
     (z: number, next: Offset) => {
-      view.current = { zoom: clampPageZoom(z), pan: next };
+      const zoom = clampPageZoom(z);
+      const current = view.current;
+      if (current.zoom === zoom && current.pan.x === next.x && current.pan.y === next.y) return;
+      view.current = { zoom, pan: next };
+      moved.current = true;
+      showInkPreview();
       if (frame.current === null)
         frame.current = requestAnimationFrame(() => {
           frame.current = null;
           paint();
         });
     },
-    [paint],
+    [paint, showInkPreview],
   );
   const commit = useCallback(() => {
     interacting.current = false;
@@ -141,7 +168,11 @@ export function usePageViewport({
     setPan({ ...current.pan });
     setZoom(current.zoom);
     setSettled((v) => v + 1);
-  }, [paint, setZoom]);
+    if (moved.current) {
+      moved.current = false;
+      settleStack(current);
+    }
+  }, [paint, setZoom, settleStack]);
   const commitSoon = useCallback(() => {
     clearTimeout(idle.current);
     idle.current = setTimeout(commit, 120);
@@ -154,9 +185,11 @@ export function usePageViewport({
       clearDetail();
       previousPage.current = pageId;
       interacting.current = false;
+      moved.current = false;
       clearTimeout(idle.current);
-      view.current = { zoom, pan: { x: 0, y: 0 } };
-      setPan({ x: 0, y: 0 });
+      const pan = takePagePan(pageId) ?? { x: 0, y: 0 };
+      view.current = { zoom, pan };
+      setPan(pan);
     } else if (!interacting.current) {
       view.current = { zoom, pan: limit(view.current.pan, zoom) };
       setPan((p) =>
@@ -164,7 +197,7 @@ export function usePageViewport({
       );
     }
     paint();
-  }, [pageId, zoom, limit, paint, clearDetail]);
+  }, [pageId, zoom, limit, paint, clearDetail, takePagePan]);
   useEffect(() => {
     const desired = rasterFor(zoom);
     if (raster.pageId !== pageId) {

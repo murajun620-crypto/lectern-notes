@@ -2,6 +2,7 @@ import { openDB } from 'idb';
 import JSZip from 'jszip';
 import { uid } from './model';
 import type { Project, Page } from './model';
+import { videoPlacementBounds } from './video-layout';
 let connection: ReturnType<typeof openDB> | undefined;
 const db = () =>
   (connection ||= openDB('lectern', 1, {
@@ -137,17 +138,18 @@ export function validateProject(p: unknown): asserts p is Project {
         }
       }
     }
+    const videoBounds = videoPlacementBounds(pg);
     for (const v of pg.videos)
       if (
         !v ||
         typeof v.id !== 'string' ||
         !/^[\w-]{11}$/.test(v.videoId) ||
-        !finite(v.x, 0, pg.width) ||
-        !finite(v.y, 0, pg.height) ||
+        !finite(v.x, videoBounds.left, videoBounds.right) ||
+        !finite(v.y, videoBounds.top, videoBounds.bottom) ||
         !finite(v.width, 1, pg.width) ||
         !finite(v.height, 1, pg.height) ||
-        v.x + v.width > pg.width + 1 ||
-        v.y + v.height > pg.height + 1
+        v.x + v.width > videoBounds.right + 1 ||
+        v.y + v.height > videoBounds.bottom + 1
       )
         return fail();
   }

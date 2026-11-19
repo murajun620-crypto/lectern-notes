@@ -227,6 +227,7 @@ test('Pencil writes in hand mode, a resting palm stays blocked, and two-finger t
   page,
 }) => {
   await demo(page);
+  await page.getByLabel('ページ表示').selectOption('single');
   // Synthetic events test routing on both engines; real pointer capture is covered by CDP tests.
   await page.evaluate(() => {
     HTMLElement.prototype.setPointerCapture = function () {};
@@ -292,6 +293,7 @@ test('Safari touch fallback flips pages while zoomed and never double-turns a Po
   page,
 }) => {
   await demo(page);
+  await page.getByLabel('ページ表示').selectOption('single');
   await page.getByLabel('表示倍率').selectOption('2');
   const r = (await page.getByTestId('stage').boundingBox())!,
     x = r.x + r.width * 0.6,

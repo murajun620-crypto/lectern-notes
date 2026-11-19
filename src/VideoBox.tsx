@@ -10,9 +10,15 @@ import {
   Minus,
   RotateCw,
 } from 'lucide-react';
-import { clamp } from './model';
 import type { Video, Page } from './model';
-import { enlargedVideoRect, playerViewport, resizeVideo, rotateVideo } from './video-layout';
+import {
+  enlargedVideoRect,
+  playerViewport,
+  positionVideo,
+  resizeVideo,
+  rotateVideo,
+} from './video-layout';
+import type { VideoBounds } from './video-layout';
 
 export type PlaybackActions = {
   enlarged: boolean;
@@ -97,6 +103,7 @@ export default function VideoBox({
   registerLecturePlayback,
   pageScale,
   displayZoom = 1,
+  visibleBounds,
   onChange,
   onDelete,
 }: {
@@ -107,6 +114,7 @@ export default function VideoBox({
   registerLecturePlayback: RegisterLecturePlayback;
   pageScale: number;
   displayZoom?: number;
+  visibleBounds: VideoBounds;
   onChange: (v: Video) => void;
   onDelete: () => void;
 }) {
@@ -126,7 +134,7 @@ export default function VideoBox({
   } | null>(null);
   const [preview, setPreview] = useState<Video | null>(null),
     previewRef = useRef<Video | null>(null);
-  const larger = playing ? enlargedVideoRect(v, page, pageScale * displayZoom) : v;
+  const larger = playing ? enlargedVideoRect(v, page, pageScale * displayZoom, visibleBounds) : v;
   const shown = playing && enlarged ? larger : preview || v;
   const canResize = (enlarged || larger.width > v.width + 0.01) && !error;
   const toggleSize = useCallback(() => setEnlarged((value) => !value), []);
@@ -150,9 +158,10 @@ export default function VideoBox({
     registerLecturePlayback,
   ]);
   const compact = shown.width * pageScale * displayZoom < 180;
-  const align = shown.x + shown.width / 2 > page.width / 2 ? 'right' : 'left';
-  const actionsBelow = shown.y * pageScale < 30;
-  const statusAbove = shown.y > page.height - shown.y - shown.height;
+  const align =
+    shown.x + shown.width / 2 > (visibleBounds.left + visibleBounds.right) / 2 ? 'right' : 'left';
+  const actionsBelow = (shown.y - visibleBounds.top) * pageScale < 30;
+  const statusAbove = shown.y - visibleBounds.top > visibleBounds.bottom - shown.y - shown.height;
   const statusBesideActions = !lecture && statusAbove !== actionsBelow;
   const showPreview = (next: Video | null) => {
     previewRef.current = next;
@@ -319,25 +328,20 @@ export default function VideoBox({
                 x: e.clientX,
                 y: e.clientY,
                 video: v,
-                rect: e.currentTarget.closest('.pdf-page')!.getBoundingClientRect(),
+                rect: e.currentTarget.closest('[data-video-paper]')!.getBoundingClientRect(),
               };
             }}
             onPointerMove={(e) => {
               const d = drag.current;
               if (!d) return;
-              showPreview({
-                ...d.video,
-                x: clamp(
+              showPreview(
+                positionVideo(
+                  d.video,
+                  page,
                   d.video.x + ((e.clientX - d.x) * page.width) / d.rect.width,
-                  0,
-                  page.width - d.video.width,
-                ),
-                y: clamp(
                   d.video.y + ((e.clientY - d.y) * page.height) / d.rect.height,
-                  0,
-                  page.height - d.video.height,
                 ),
-              });
+              );
             }}
             onPointerUp={() => {
               if (previewRef.current) onChange(previewRef.current);
@@ -383,7 +387,7 @@ export default function VideoBox({
                 x: e.clientX,
                 y: e.clientY,
                 video: v,
-                rect: e.currentTarget.closest('.pdf-page')!.getBoundingClientRect(),
+                rect: e.currentTarget.closest('[data-video-paper]')!.getBoundingClientRect(),
               };
             }}
             onPointerMove={(e) => {

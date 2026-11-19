@@ -26,15 +26,16 @@ async function stored(page: Page) {
 }
 const saved = (page: Page) => expect(page.locator('.save-status')).toHaveText('保存済み');
 async function alpha(page: Page, x: number, y: number) {
-  return page
-    .getByTestId('ink-canvas')
-    .evaluate(
-      (c: HTMLCanvasElement, p) =>
-        c
-          .getContext('2d')!
-          .getImageData(Math.round(c.width * p.x), Math.round(c.height * p.y), 1, 1).data[3],
-      { x, y },
-    );
+  return page.getByTestId('ink-canvas').evaluate(
+    (c: HTMLCanvasElement, p) => {
+      const page = document.querySelector('[data-testid="pdf-page"]')!.getBoundingClientRect();
+      const ink = c.getBoundingClientRect();
+      const x = Math.floor(((page.left + page.width * p.x - ink.left) * c.width) / ink.width);
+      const y = Math.floor(((page.top + page.height * p.y - ink.top) * c.height) / ink.height);
+      return c.getContext('2d')!.getImageData(x, y, 1, 1).data[3];
+    },
+    { x, y },
+  );
 }
 async function line(page: Page, x1: number, y1: number, x2: number, y2: number, steps = 30) {
   const r = (await page.getByTestId('pdf-page').boundingBox())!;
@@ -73,6 +74,12 @@ test('circular eraser keeps both ends, supports undo and zoom, and preserves PDF
   await page.mouse.down();
   await expect(page.getByTestId('eraser-cursor')).toBeVisible();
   expect((await page.getByTestId('eraser-cursor').boundingBox())!.width).toBe(16);
+  await expect.poll(() => alpha(page, 0.5, 0.4)).toBe(0);
+  expect((await stored(page))[0].pages[0].strokes[0].erasures).toBeUndefined();
+  await page.evaluate(() => window.dispatchEvent(new Event('blur')));
+  await expect.poll(() => alpha(page, 0.5, 0.4)).toBeGreaterThan(200);
+  await page.mouse.up();
+  await page.mouse.down();
   await page.mouse.up();
   await saved(page);
   await expect.poll(() => alpha(page, 0.5, 0.4)).toBe(0);

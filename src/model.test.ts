@@ -64,6 +64,13 @@ describe('backup validation', () => {
     pages: [blankPage()],
   });
   it('accepts a valid project', () => expect(() => validateProject(valid())).not.toThrow());
+  it('accepts video placements that extend beyond the paper', () => {
+    const p = valid();
+    p.pages[0].videos = [
+      { id: 'v', videoId: 'M7lc1UVf-VE', x: -40, y: 780, width: 160, height: 90 },
+    ];
+    expect(() => validateProject(p)).not.toThrow();
+  });
   it('rejects invalid coordinates and missing pages', () => {
     const p = valid();
     p.pages[0].videos = [

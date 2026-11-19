@@ -2,6 +2,20 @@ import { clamp } from './model';
 import type { Page, Video } from './model';
 
 type Paper = Pick<Page, 'width' | 'height'>;
+export type VideoBounds = { left: number; right: number; top: number; bottom: number };
+
+export function videoPlacementBounds(page: Paper): VideoBounds {
+  return { left: -page.width, right: page.width * 2, top: -page.height, bottom: page.height * 2 };
+}
+
+export function positionVideo(v: Video, page: Paper, x: number, y: number): Video {
+  const edges = videoPlacementBounds(page);
+  return {
+    ...v,
+    x: clamp(x, edges.left, edges.right - v.width),
+    y: clamp(y, edges.top, edges.bottom - v.height),
+  };
+}
 
 export function initialVideoRect(page: Paper, portrait = false) {
   const [w, h] = portrait ? [90, 160] : [160, 90];
@@ -19,32 +33,50 @@ export function rotateVideo(v: Video, page: Paper) {
   const scale = Math.min(1, page.width / w, page.height / h);
   const width = w * scale,
     height = h * scale;
-  return {
-    ...v,
-    x: clamp(v.x + (v.width - width) / 2, 0, page.width - width),
-    y: clamp(v.y + (v.height - height) / 2, 0, page.height - height),
-    width,
-    height,
-  };
+  return positionVideo(
+    { ...v, width, height },
+    page,
+    v.x + (v.width - width) / 2,
+    v.y + (v.height - height) / 2,
+  );
 }
 
 export function resizeVideo(v: Video, page: Paper, factor: number) {
-  const max = Math.min((page.width - v.x) / v.width, (page.height - v.y) / v.height);
+  const edges = videoPlacementBounds(page);
+  const max = Math.min(
+    page.width / v.width,
+    page.height / v.height,
+    (edges.right - v.x) / v.width,
+    (edges.bottom - v.y) / v.height,
+  );
   const min = Math.min(1, 64 / Math.max(v.width, v.height), max);
   const scale = clamp(factor, min, max);
   return { ...v, width: v.width * scale, height: v.height * scale };
 }
 
 /** Extra space for controls is opt-in and stays within the PDF when possible. */
-export function enlargedVideoRect(v: Video, page: Paper, screenScale: number) {
-  const max = Math.min(page.width / v.width, page.height / v.height);
+export function enlargedVideoRect(
+  v: Video,
+  page: Paper,
+  screenScale: number,
+  bounds: VideoBounds = { left: 0, top: 0, right: page.width, bottom: page.height },
+) {
+  const max = Math.min(
+    (bounds.right - bounds.left) / v.width,
+    (bounds.bottom - bounds.top) / v.height,
+  );
   const desired = Math.max(360 / Math.max(v.width, v.height), 200 / Math.min(v.width, v.height));
   const scale = Math.max(1, Math.min(max, desired / screenScale));
+  if (scale === 1) return v;
   const width = v.width * scale,
     height = v.height * scale;
   return {
-    x: clamp(v.x + (v.width - width) / 2, 0, Math.max(0, page.width - width)),
-    y: clamp(v.y + (v.height - height) / 2, 0, Math.max(0, page.height - height)),
+    x: clamp(v.x + (v.width - width) / 2, bounds.left, Math.max(bounds.left, bounds.right - width)),
+    y: clamp(
+      v.y + (v.height - height) / 2,
+      bounds.top,
+      Math.max(bounds.top, bounds.bottom - height),
+    ),
     width,
     height,
   };
