@@ -872,12 +872,17 @@ export default function Stage({
       const { touchId, pointerId, shortTouchEnd } = g.pencil;
       const recoveredEndpoint = !!shortTouchEnd && g.points.length === 1;
       if (recoveredEndpoint) g.points.push(shortTouchEnd);
-      pencilDiagnostics?.finishStroke({
-        pointerId,
-        touchId,
-        pointCount: g.points.length,
-        recoveredEndpoint,
-      });
+      if (pencilDiagnostics) {
+        const last = g.points.at(-1)!;
+        pencilDiagnostics.finishStroke({
+          pointerId,
+          touchId,
+          pointCount: g.points.length,
+          recoveredEndpoint,
+          dx: ((last.x - g.start.x) * g.paperRect.width) / page.width,
+          dy: ((last.y - g.start.y) * g.paperRect.height) / page.height,
+        });
+      }
       const now = performance.now();
       if (pointerId !== undefined) palm.current.penUp(pointerId, now);
       if (touchId !== undefined && stylusContact.current === touchId) {

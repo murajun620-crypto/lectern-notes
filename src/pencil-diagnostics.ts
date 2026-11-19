@@ -1,18 +1,24 @@
 type Contact = { clientX: number; clientY: number };
 type StylusTouch = Touch & { touchType?: string; force?: number };
 
-const eventLimit = 800;
+const eventLimit = 8192;
 const round = (value: number) => Math.round(value * 10) / 10;
 
 export function createPencilDiagnostics() {
   const startedAt = performance.now();
   const events: Record<string, unknown>[] = [];
   let omitted = 0;
+  let oldest = 0;
 
   const record = (event: Record<string, unknown>) => {
-    if (events.length < eventLimit)
-      events.push({ receivedMs: round(performance.now() - startedAt), ...event });
-    else omitted++;
+    const entry = { receivedMs: round(performance.now() - startedAt), ...event };
+    if (events.length < eventLimit) {
+      events.push(entry);
+      return;
+    }
+    events[oldest] = entry;
+    oldest = (oldest + 1) % eventLimit;
+    omitted++;
   };
 
   const attach = (stage: HTMLElement) => {
@@ -91,8 +97,10 @@ export function createPencilDiagnostics() {
       touchId?: number;
       pointCount: number;
       recoveredEndpoint: boolean;
+      dx: number;
+      dy: number;
     }) {
-      record({ type: 'strokeFinished', ...details });
+      record({ ...details, type: 'strokeFinished', dx: round(details.dx), dy: round(details.dy) });
     },
     report: () =>
       JSON.stringify(
@@ -100,7 +108,7 @@ export function createPencilDiagnostics() {
           version: __APP_VERSION__,
           standalone: window.matchMedia('(display-mode: standalone)').matches,
           omitted,
-          events,
+          events: oldest ? [...events.slice(oldest), ...events.slice(0, oldest)] : events,
         },
         null,
         2,

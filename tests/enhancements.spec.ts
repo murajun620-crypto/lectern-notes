@@ -364,6 +364,8 @@ test.describe('Pencil contact samples', () => {
         touchId: 42,
         pointCount: 2,
         recoveredEndpoint: true,
+        dx: 6,
+        dy: 0,
       },
     ]);
   });
