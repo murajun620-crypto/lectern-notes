@@ -98,7 +98,6 @@ export function useInkLayer({
   settled,
   interacting,
   working,
-  selection,
   lasso,
   neighbors,
   center,
@@ -112,7 +111,6 @@ export function useInkLayer({
   settled: number;
   interacting: RefObject<boolean>;
   working: Stroke[] | null;
-  selection: string[];
   lasso: Point[];
   neighbors: StackPage[];
   center: number;
@@ -132,7 +130,7 @@ export function useInkLayer({
   const draft = useRef<Stroke | null>(null);
   const draftFrame = useRef<number | null>(null);
   const draftArea = useRef<InkBounds | null>(null);
-  const selectionVisible = useRef(false);
+  const lassoVisible = useRef(false);
   const eraseFrame = useRef<number | null>(null);
   const erasing = useRef<{ points: Point[]; width: number; painted: number } | null>(null);
   const [eraseRevision, setEraseRevision] = useState(0);
@@ -348,41 +346,23 @@ export function useInkLayer({
   useLayoutEffect(() => {
     const geometry = rasterGeometry.current;
     if (!geometry || interacting.current) return;
-    if (!lasso.length && !selection.length) {
-      if (selectionVisible.current) {
+    if (!lasso.length) {
+      if (lassoVisible.current) {
         clearCanvas(draftCanvas.current!, geometry.width, geometry.height);
-        selectionVisible.current = false;
+        lassoVisible.current = false;
       }
       return;
     }
-    selectionVisible.current = true;
+    lassoVisible.current = true;
     const ctx = clearCanvas(draftCanvas.current!, geometry.width, geometry.height);
     inPage(ctx, geometry, () => {
       ctx.strokeStyle = '#367f77';
       ctx.lineWidth = 1.5 / actualScale;
       ctx.setLineDash([5 / actualScale, 4 / actualScale]);
-      if (lasso.length) {
-        ctx.beginPath();
-        lasso.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
-        ctx.closePath();
-        ctx.stroke();
-      }
-      if (!selection.length) return;
-      let left = Infinity,
-        top = Infinity,
-        right = -Infinity,
-        bottom = -Infinity;
-      for (const stroke of strokes) {
-        if (!selection.includes(stroke.id)) continue;
-        for (const p of stroke.points) {
-          left = Math.min(left, p.x);
-          top = Math.min(top, p.y);
-          right = Math.max(right, p.x);
-          bottom = Math.max(bottom, p.y);
-        }
-      }
-      if (Number.isFinite(left))
-        ctx.strokeRect(left - 6, top - 6, right - left + 12, bottom - top + 12);
+      ctx.beginPath();
+      lasso.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)));
+      ctx.closePath();
+      ctx.stroke();
     });
   }, [
     id,
@@ -394,10 +374,8 @@ export function useInkLayer({
     actualScale,
     pageX,
     pageY,
-    strokes,
     settled,
     lasso,
-    selection,
     interacting,
   ]);
 

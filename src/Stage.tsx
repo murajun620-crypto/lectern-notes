@@ -1,8 +1,7 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 import { flushSync } from 'react-dom';
-import { Trash2 } from 'lucide-react';
-import { drawLaser, pointInPolygon, pointErased, strokeHit, translateStroke, uid } from './model';
+import { drawLaser, strokeHit, transformStroke, uid } from './model';
 import type { Page, Point, Stroke, Tool, Video } from './model';
 import { renderPage } from './pdf';
 import VideoBox from './VideoBox';
@@ -14,6 +13,21 @@ import { useInkLayer } from './useInkLayer';
 import { usePageStack } from './usePageStack';
 import PageStackPreview from './PageStackPreview';
 import { applyErasure } from './eraser';
+import InkSelectionControls from './InkSelectionControls';
+import {
+  centerOf,
+  hitBounds,
+  inkSelection,
+  lassoStrokes,
+  selectionTransform,
+} from './ink-selection';
+import type { InkSelection, Position } from './ink-selection';
+
+type InkTransform = ReturnType<typeof selectionTransform>;
+type GestureKind = 'draw' | 'erase' | 'lasso' | 'move' | 'resize' | 'pan' | 'laser';
+const changeSelection = (strokes: Stroke[], ids: Set<string>, { scale, x, y }: InkTransform) =>
+  strokes.map((stroke) => (ids.has(stroke.id) ? transformStroke(stroke, scale, x, y) : stroke));
+
 type Props = {
   page: Page;
   continuousPages?: Page[];
@@ -33,6 +47,8 @@ type Props = {
   registerLecturePlayback: RegisterLecturePlayback;
   fitWidth: boolean;
   zoom: number;
+  inkClipboard: Stroke[];
+  onCopyInk: (strokes: Stroke[]) => void;
   setZoom: (z: number) => void;
   onChange: (page: Page) => void;
   onNavigate: (delta: number) => void;
@@ -57,6 +73,8 @@ export default function Stage({
   registerLecturePlayback,
   fitWidth,
   zoom,
+  inkClipboard,
+  onCopyInk,
   setZoom,
   onChange,
   onNavigate,
@@ -73,11 +91,22 @@ export default function Stage({
     [loading, setLoading] = useState(true);
   const [selection, setSelection] = useState<string[]>([]),
     [lasso, setLasso] = useState<Point[]>([]),
-    [working, setWorking] = useState<Stroke[] | null>(null);
+    [selectionPreview, setSelectionPreview] = useState<InkTransform | null>(null),
+    [pasteAnchor, setPasteAnchor] = useState<Position | null>(null);
+  const selectionIds = useMemo(() => new Set(selection), [selection]);
+  const selected = useMemo(
+    () => (selectionIds.size ? page.strokes.filter((stroke) => selectionIds.has(stroke.id)) : []),
+    [page.strokes, selectionIds],
+  );
+  const selectionShape = useMemo(() => inkSelection(selected), [selected]);
+  const working = useMemo(
+    () => selectionPreview && changeSelection(page.strokes, selectionIds, selectionPreview),
+    [page.strokes, selectionIds, selectionPreview],
+  );
   const pageRef = useRef(page);
   pageRef.current = page;
   const gesture = useRef<{
-    kind: 'draw' | 'erase' | 'lasso' | 'move' | 'pan' | 'laser';
+    kind: GestureKind;
     id: number;
     pointerType: string;
     started: number;
@@ -87,8 +116,9 @@ export default function Stage({
     pan: { x: number; y: number };
     points: Point[];
     stroke?: Stroke;
-    selection?: string[];
-    result?: Stroke[];
+    selection: Set<string>;
+    shape: InkSelection | null;
+    moved?: boolean;
     erasure?: { id: string; width: number };
   } | null>(null);
   const touches = useRef(new Map<number, { x: number; y: number }>()),
@@ -175,7 +205,6 @@ export default function Stage({
     settled,
     interacting,
     working,
-    selection,
     lasso,
     neighbors: stack.nearby,
     center: stack.active?.center ?? 0,
@@ -183,7 +212,7 @@ export default function Stage({
   const clearInkGesture = useCallback(() => {
     clearDraft();
     finishErasure();
-    setWorking(null);
+    setSelectionPreview(null);
     setLasso([]);
   }, [clearDraft, finishErasure]);
   const screenScale = () => fit * view.current.zoom;
@@ -221,6 +250,7 @@ export default function Stage({
   }, []);
   useLayoutEffect(() => {
     setSelection([]);
+    setPasteAnchor(null);
     clearInkGesture();
     gesture.current = null;
     touches.current.clear();
@@ -249,6 +279,7 @@ export default function Stage({
   useEffect(() => {
     setSelection([]);
     setLasso([]);
+    setPasteAnchor(null);
   }, [tool]);
   useEffect(() => {
     let cancelled = false;
@@ -428,6 +459,134 @@ export default function Stage({
       if (Math.hypot(p.x - last.x, p.y - last.y) > spacing) points.push(p);
     }
   };
+  const removeSelection = () => {
+    if (!selected.length) return;
+    onChange({ ...page, strokes: page.strokes.filter((stroke) => !selectionIds.has(stroke.id)) });
+    setSelection([]);
+    setPasteAnchor(null);
+  };
+  const copySelection = (cut: boolean) => {
+    if (!selected.length) return;
+    onCopyInk(selected);
+    if (cut) removeSelection();
+  };
+  const commitSelection = (original: Stroke[], ids: Set<string>, transform: InkTransform) => {
+    if (transform.scale === 1 && transform.x === 0 && transform.y === 0) return;
+    onChange({ ...pageRef.current, strokes: changeSelection(original, ids, transform) });
+  };
+  const resizeSelection = (factor: number) => {
+    if (!selectionShape) return;
+    const center = centerOf(selectionShape.bounds);
+    commitSelection(
+      page.strokes,
+      selectionIds,
+      selectionTransform(selectionShape, page, center, center, factor),
+    );
+  };
+  const addInk = (source: Stroke[], shape: InkSelection, destination: Position) => {
+    const { left, top, right, bottom } = shape.bounds;
+    const fit = Math.min(1, page.width / (right - left), page.height / (bottom - top));
+    const { scale, x, y } = selectionTransform(
+      shape,
+      page,
+      centerOf(shape.bounds),
+      destination,
+      fit,
+    );
+    const copies = source.map((stroke) => ({
+      ...transformStroke(stroke, scale, x, y),
+      id: uid(),
+    }));
+    onChange({ ...page, strokes: [...page.strokes, ...copies] });
+    setPasteAnchor(null);
+    setSelection(copies.map((stroke) => stroke.id));
+  };
+  const duplicateSelection = () => {
+    if (!selectionShape) return;
+    const bounds = selectionShape.bounds;
+    const center = centerOf(bounds);
+    const offset = 22 / screenScale();
+    addInk(selected, selectionShape, {
+      x: center.x + (bounds.right + offset <= page.width ? offset : -offset),
+      y: center.y + (bounds.bottom + offset <= page.height ? offset : -offset),
+    });
+  };
+  const pasteSelection = () => {
+    const shape = inkSelection(inkClipboard);
+    if (!shape) return;
+    const visibleCenter = {
+      x: page.width / 2 - view.current.pan.x / screenScale(),
+      y: page.height / 2 - view.current.pan.y / screenScale(),
+    };
+    const center = selectionShape ? centerOf(selectionShape.bounds) : visibleCenter;
+    const offset = selectionShape ? 22 / screenScale() : 0;
+    addInk(inkClipboard, shape, pasteAnchor ?? { x: center.x + offset, y: center.y + offset });
+  };
+  const selectAt = (p: Point, strokes: Stroke[]) => {
+    const radius = 7 / screenScale();
+    let picked: Stroke | undefined;
+    for (let i = strokes.length - 1; i >= 0; i--) {
+      if (strokeHit(strokes[i], p, radius)) {
+        picked = strokes[i];
+        break;
+      }
+    }
+    setSelection(picked ? [picked.id] : []);
+    setPasteAnchor(
+      !picked &&
+        inkClipboard.length &&
+        p.x >= 0 &&
+        p.x <= page.width &&
+        p.y >= 0 &&
+        p.y <= page.height
+        ? p
+        : null,
+    );
+  };
+  const selectionKeys = useRef<(event: KeyboardEvent) => void>(() => {});
+  selectionKeys.current = (e) => {
+    if (
+      tool !== 'select' ||
+      gesture.current ||
+      e.defaultPrevented ||
+      (e.target as Element | null)?.closest?.('input,textarea,select,[contenteditable],dialog') ||
+      document.querySelector('dialog[open]')
+    )
+      return;
+    const key = e.key.toLowerCase();
+    const command = (e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey;
+    if (command && key === 'v' && inkClipboard.length) {
+      e.preventDefault();
+      pasteSelection();
+    } else if (command && (key === 'c' || key === 'x') && selected.length) {
+      e.preventDefault();
+      copySelection(key === 'x');
+    } else if (
+      !e.ctrlKey &&
+      !e.metaKey &&
+      !e.altKey &&
+      (key === 'delete' || key === 'backspace') &&
+      selected.length
+    ) {
+      e.preventDefault();
+      removeSelection();
+    }
+  };
+  useEffect(() => {
+    const handler = (event: KeyboardEvent) => selectionKeys.current(event);
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, []);
+  const dragSelection = (g: NonNullable<typeof gesture.current>, e: ReactPointerEvent) => {
+    if (!g.shape || Math.hypot(e.clientX - g.client.x, e.clientY - g.client.y) < 3) return null;
+    const p = point(e);
+    if (g.kind === 'move') return selectionTransform(g.shape, page, g.start, p, 1);
+    const anchor = { x: g.shape.bounds.left, y: g.shape.bounds.top };
+    const dx = g.start.x - anchor.x;
+    const dy = g.start.y - anchor.y;
+    const ratio = ((p.x - anchor.x) * dx + (p.y - anchor.y) * dy) / (dx * dx + dy * dy || 1);
+    return selectionTransform(g.shape, page, anchor, anchor, ratio);
+  };
   const turnBySwipe = (dx: number, dy: number) => {
     if (
       stack.active ||
@@ -485,22 +644,25 @@ export default function Stage({
       pinch.current = null;
     }
     if (gesture.current) return;
-    const p = point(e),
-      isInk = e.pointerType === 'pen' || e.pointerType === 'mouse' || fingerInk || tool === 'laser';
+    const p = point(e);
     const selectedTool = effectiveTool(tool, pencilTool, e.pointerType, fingerInk);
-    let kind: 'draw' | 'erase' | 'lasso' | 'move' | 'pan' | 'laser' = 'pan';
+    const resize = !!(e.target as Element).closest('[data-ink-resize]');
+    const inSelection =
+      selectionShape && (resize || hitBounds(selectionShape.bounds, p, 7 / screenScale()));
+    const isInk =
+      e.pointerType !== 'touch' ||
+      fingerInk ||
+      tool === 'laser' ||
+      (selectedTool === 'select' && inSelection);
+    let kind: GestureKind = 'pan';
     if (isInk) {
       if (selectedTool === 'pen' || selectedTool === 'highlighter') kind = 'draw';
       else if (selectedTool === 'select')
-        kind =
-          selection.length &&
-          page.strokes.some((s) => selection.includes(s.id) && strokeHit(s, p, 18 / screenScale()))
-            ? 'move'
-            : 'lasso';
+        kind = inSelection ? (resize ? 'resize' : 'move') : 'lasso';
       else if (selectedTool === 'eraser') kind = 'erase';
       else if (selectedTool === 'laser') kind = 'laser';
     }
-    if (kind === 'pan') beginView();
+    if (kind === 'pan' && (tool !== 'select' || e.pointerType !== 'touch')) beginView();
     showEraser(e);
     gesture.current = {
       kind,
@@ -512,7 +674,8 @@ export default function Stage({
       pan,
       original: page.strokes,
       points: [p],
-      selection,
+      selection: selectionIds,
+      shape: selectionShape,
     };
     if (kind === 'draw') {
       const s: Stroke = {
@@ -531,6 +694,7 @@ export default function Stage({
     }
     if (kind === 'lasso') {
       setSelection([]);
+      setPasteAnchor(null);
       setLasso([p]);
     }
     if (kind === 'laser') lasers.current.push({ ...p, t: performance.now() });
@@ -541,6 +705,7 @@ export default function Stage({
     if (
       stack.active &&
       !gesture.current &&
+      !(e.target as Element).closest('[data-ink-resize]') &&
       e.button === 0 &&
       (e.pointerType !== 'touch' || fingerInk || tool === 'laser') &&
       effectiveTool(tool, pencilTool, e.pointerType, fingerInk) !== 'hand'
@@ -584,6 +749,9 @@ export default function Stage({
       return;
     }
     if (g.kind === 'pan') {
+      if (Math.hypot(e.clientX - g.client.x, e.clientY - g.client.y) >= 5) g.moved = true;
+      if (tool === 'select' && e.pointerType === 'touch' && !g.moved) return;
+      if (!interacting.current) beginView();
       moveView(
         view.current.zoom,
         limit({ x: g.pan.x + e.clientX - g.client.x, y: g.pan.y + e.clientY - g.client.y }),
@@ -607,15 +775,7 @@ export default function Stage({
       g.points.push(point(e));
       setLasso([...g.points]);
     }
-    if (g.kind === 'move') {
-      const p = point(e);
-      const dx = p.x - g.start.x,
-        dy = p.y - g.start.y;
-      g.result = g.original.map((s) =>
-        g.selection!.includes(s.id) ? translateStroke(s, dx, dy) : s,
-      );
-      setWorking(g.result);
-    }
+    if (g.kind === 'move' || g.kind === 'resize') setSelectionPreview(dragSelection(g, e));
   };
   const up = (e: ReactPointerEvent, cancel = false) => {
     if (e.pointerType !== 'mouse' || cancel) hideEraser();
@@ -643,7 +803,7 @@ export default function Stage({
     const g = gesture.current;
     if (!g || g.id !== e.pointerId) return;
     gesture.current = null;
-    if (g.kind === 'pan') commitView();
+    if (g.kind === 'pan' && interacting.current) commitView();
     if (g.kind === 'draw' && (!cancel || (g.pointerType === 'pen' && g.points.length > 1))) {
       if (!cancel) {
         const p = point(e);
@@ -658,32 +818,29 @@ export default function Stage({
     }
     if (!cancel) {
       // Commit event-time data, never React's potentially deferred pointermove render.
-      if (g.kind === 'move') {
-        const p = point(e),
-          dx = p.x - g.start.x,
-          dy = p.y - g.start.y;
-        g.result = g.original.map((s) =>
-          g.selection!.includes(s.id) ? translateStroke(s, dx, dy) : s,
-        );
+      if (g.kind === 'move' || g.kind === 'resize') {
+        const transform = dragSelection(g, e);
+        if (transform) commitSelection(g.original, g.selection, transform);
       }
       if (g.kind === 'erase') {
         const p = point(e),
           last = g.points.at(-1)!;
         if (Math.hypot(p.x - last.x, p.y - last.y) > 1e-6) g.points.push(p);
-        g.result = applyErasure(g.original, { ...g.erasure!, points: g.points });
+        const result = applyErasure(g.original, { ...g.erasure!, points: g.points });
+        if (result !== g.original) onChange({ ...pageRef.current, strokes: result });
       }
-      if ((g.kind === 'erase' || g.kind === 'move') && g.result && g.result !== g.original)
-        onChange({ ...pageRef.current, strokes: g.result });
-      if (g.kind === 'lasso')
-        setSelection(
-          g.original
-            .filter((s) => s.points.some((p) => !pointErased(s, p) && pointInPolygon(p, g.points)))
-            .map((s) => s.id),
-        );
+      if (g.kind === 'lasso') {
+        g.points.push(point(e));
+        const radius = 5 / screenScale();
+        if (g.points.every((p) => Math.hypot(p.x - g.start.x, p.y - g.start.y) < radius)) {
+          selectAt(g.start, g.original);
+        } else setSelection(lassoStrokes(g.original, g.points).map((stroke) => stroke.id));
+      }
       if (g.kind === 'pan' && g.pointerType === 'touch') {
         const dx = e.clientX - g.client.x,
           dy = e.clientY - g.client.y;
-        turnBySwipe(dx, dy);
+        if (tool === 'select' && !g.moved && Math.hypot(dx, dy) < 5) selectAt(g.start, g.original);
+        else turnBySwipe(dx, dy);
       }
     }
     clearInkGesture();
@@ -716,6 +873,28 @@ export default function Stage({
       />
     ));
   };
+  const displayScale = fit * zoom;
+  const paperOrigin = {
+    x: (size.w - page.width * displayScale) / 2 + pan.x,
+    y: (size.h - page.height * displayScale) / 2 + pan.y,
+  };
+  const toScreen = (p: Position) => ({
+    x: paperOrigin.x + p.x * displayScale,
+    y: paperOrigin.y + p.y * displayScale,
+  });
+  const frame =
+    selectionShape &&
+    (() => {
+      const { left, top, right, bottom } = selectionShape.bounds;
+      const { scale, x, y } = selectionPreview ?? { scale: 1, x: 0, y: 0 };
+      const start = toScreen({ x: left * scale + x, y: top * scale + y });
+      return {
+        left: start.x - 5,
+        top: start.y - 5,
+        width: (right - left) * scale * displayScale + 10,
+        height: (bottom - top) * scale * displayScale + 10,
+      };
+    })();
   return (
     <div
       className={`stage tool-${tool}`}
@@ -793,7 +972,7 @@ export default function Stage({
         const contacts = Array.from(e.touches) as Array<
           (typeof e.touches)[0] & { radiusX?: number; radiusY?: number; touchType?: string }
         >;
-        const interactive = (e.target as Element).closest('.video-box,.selection-delete');
+        const interactive = (e.target as Element).closest('.video-box,[data-selection-control]');
         if (
           contacts.length === 2 &&
           !interactive &&
@@ -843,6 +1022,8 @@ export default function Stage({
           fingerInk ||
           tool === 'laser' ||
           interactive ||
+          gesture.current?.kind === 'move' ||
+          gesture.current?.kind === 'resize' ||
           palm.current.blocksNavigation(performance.now(), palmRejection)
         ) {
           swipe.current = null;
@@ -919,7 +1100,7 @@ export default function Stage({
           return;
         }
         const g = swipe.current;
-        if (!g) return;
+        if (!g || gesture.current?.kind === 'move' || gesture.current?.kind === 'resize') return;
         if (
           e.touches.length !== 1 ||
           palm.current.blocksNavigation(performance.now(), palmRejection)
@@ -1080,23 +1261,26 @@ export default function Stage({
         data-testid="eraser-cursor"
         aria-hidden="true"
       />
-      {!!selection.length && (
-        <button
-          className="selection-delete"
-          onPointerDown={(e) => e.stopPropagation()}
-          onClick={() => {
-            onChange({ ...page, strokes: page.strokes.filter((s) => !selection.includes(s.id)) });
-            setSelection([]);
-          }}
-        >
-          <Trash2 size={17} /> 選択した線を削除 ({selection.length})
-        </button>
+      {tool === 'select' && (
+        <InkSelectionControls
+          frame={frame}
+          anchor={pasteAnchor && toScreen(pasteAnchor)}
+          viewport={size}
+          dragging={!!selectionPreview}
+          onResize={resizeSelection}
+          onCopy={copySelection}
+          onDuplicate={duplicateSelection}
+          onRemove={removeSelection}
+          onPaste={inkClipboard.length ? pasteSelection : undefined}
+        />
       )}
       <div className="stage-note">
         {tool === 'laser'
           ? '触れて動かすとレーザーを表示'
           : tool === 'select'
-            ? '線を囲んで選択 → ドラッグで移動'
+            ? inkClipboard.length
+              ? '空白をタップして貼り付け先を指定'
+              : '線を囲むかタップして選択'
             : zoom > 1
               ? '2本指で移動・ピンチで拡大縮小'
               : fingerInk

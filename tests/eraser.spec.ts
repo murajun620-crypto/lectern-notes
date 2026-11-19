@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import type { Page } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
+import type { Stroke } from '../src/model';
 
 async function demo(page: Page) {
   await page.goto('/');
@@ -45,6 +46,103 @@ async function line(page: Page, x1: number, y1: number, x2: number, y2: number, 
   await page.mouse.up();
   await saved(page);
 }
+
+test.describe('selection actions', () => {
+  test.use({ viewport: { width: 1024, height: 768 }, hasTouch: true });
+
+  test('resizes masked ink with a corner or buttons and copies it to another page', async ({
+    page,
+  }) => {
+    await demo(page);
+    await page.getByRole('button', { name: '蛍光ペン', exact: true }).tap();
+    await page.getByLabel('蛍光ペンの太さ').selectOption('20');
+    await line(page, 0.28, 0.39, 0.58, 0.39);
+    await page.getByRole('button', { name: '消しゴム', exact: true }).tap();
+    await page.getByLabel('消しゴムのサイズ').selectOption('8');
+    await line(page, 0.43, 0.39, 0.43, 0.39, 1);
+    const strokes = async (index = 0): Promise<Stroke[]> =>
+      (await stored(page))[0].pages[index].strokes;
+    const [original] = await strokes();
+    const assertScaled = (ink: Stroke, factor: number) => {
+      const mask = ink.erasures![0];
+      const originalMask = original.erasures![0];
+      const delta = (s: Stroke) => s.points.at(-1)!.x - s.points[0].x;
+      expect(ink.width).toBeCloseTo(original.width * factor);
+      expect(delta(ink)).toBeCloseTo(delta(original) * factor);
+      expect(mask.width).toBeCloseTo(originalMask.width * factor);
+      expect(mask.points[0].x - ink.points[0].x).toBeCloseTo(
+        (originalMask.points[0].x - original.points[0].x) * factor,
+      );
+      expect(mask.points[0].y - ink.points[0].y).toBeCloseTo(
+        (originalMask.points[0].y - original.points[0].y) * factor,
+      );
+    };
+    const paper = page.getByTestId('pdf-page');
+    const tapPaper = async (x: number, y: number) => {
+      const r = (await paper.boundingBox())!;
+      await page.touchscreen.tap(r.x + r.width * x, r.y + r.height * y);
+    };
+    await page.getByRole('button', { name: '選択', exact: true }).tap();
+    await tapPaper(0.35, 0.39);
+    const menu = page.getByRole('group', { name: '選択した筆記の操作' });
+    const frame = page.getByTestId('ink-selection-frame');
+    await expect(frame).toBeVisible();
+    await menu.getByRole('button', { name: '拡大', exact: true }).tap();
+    await saved(page);
+    assertScaled((await strokes())[0], 1.25);
+    await menu.getByRole('button', { name: '縮小', exact: true }).tap();
+    await saved(page);
+    assertScaled((await strokes())[0], 1);
+
+    const handle = (await page.getByTestId('ink-resize-handle').boundingBox())!;
+    const x = handle.x + handle.width / 2;
+    const y = handle.y + handle.height / 2;
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(x + 45, y + 15, { steps: 6 });
+    await page.mouse.up();
+    await saved(page);
+    const [resized] = await strokes();
+    expect(resized.id).toBe(original.id);
+    const factor = resized.width / original.width;
+    expect(factor).toBeGreaterThan(1.15);
+    assertScaled(resized, factor);
+    await page.getByRole('button', { name: '元に戻す', exact: true }).tap();
+    await saved(page);
+    assertScaled((await strokes())[0], 1);
+    await page.getByRole('button', { name: 'やり直す', exact: true }).tap();
+    await saved(page);
+    assertScaled((await strokes())[0], factor);
+
+    await menu.getByRole('button', { name: 'コピー', exact: true }).tap();
+    await expect(menu.getByRole('button', { name: '貼り付け', exact: true })).toBeVisible();
+    await menu.getByRole('button', { name: '複製', exact: true }).tap();
+    await saved(page);
+    const duplicate = (await strokes())[1];
+    assertScaled(duplicate, factor);
+    expect(duplicate.id).not.toBe(original.id);
+    expect(duplicate.points[0].y).not.toBe(resized.points[0].y);
+    await menu.getByRole('button', { name: '切り取り', exact: true }).tap();
+    await saved(page);
+    expect(await strokes()).toHaveLength(1);
+
+    await page.getByRole('button', { name: '次のページ', exact: true }).last().tap();
+    await expect(page.getByLabel('ページ番号')).toHaveValue('2');
+    await tapPaper(0.52, 0.65);
+    await menu.getByRole('button', { name: '貼り付け', exact: true }).tap();
+    await saved(page);
+    const [pasted] = await strokes(1);
+    assertScaled(pasted, factor);
+    expect(pasted.id).not.toBe(duplicate.id);
+    const p = (await stored(page))[0].pages[1];
+    const centerX = (pasted.points[0].x + pasted.points.at(-1)!.x) / 2;
+    expect(centerX / p.width).toBeCloseTo(0.52, 2);
+    expect(pasted.points[0].y / p.height).toBeCloseTo(0.65, 2);
+    await page.reload();
+    await expect(page.getByLabel('ページ番号')).toHaveValue('2');
+    expect((await strokes(1))[0]).toEqual(pasted);
+  });
+});
 
 test('circular eraser keeps both ends, supports undo and zoom, and preserves PDF and later ink', async ({
   page,

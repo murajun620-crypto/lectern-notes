@@ -94,12 +94,20 @@ export function strokeHit(stroke: Stroke, point: Point, radius: number) {
   });
 }
 export function translateStroke(stroke: Stroke, dx: number, dy: number): Stroke {
-  const shift = (p: Point) => ({ ...p, x: p.x + dx, y: p.y + dy });
+  return transformStroke(stroke, 1, dx, dy);
+}
+export function transformStroke(stroke: Stroke, scale: number, dx: number, dy: number): Stroke {
+  const shift = (p: Point) => ({ ...p, x: p.x * scale + dx, y: p.y * scale + dy });
   return {
     ...stroke,
+    width: stroke.width * scale,
     points: stroke.points.map(shift),
     ...(stroke.erasures && {
-      erasures: stroke.erasures.map((e) => ({ ...e, points: e.points.map(shift) })),
+      erasures: stroke.erasures.map((e) => ({
+        ...e,
+        width: e.width * scale,
+        points: e.points.map(shift),
+      })),
     }),
   };
 }

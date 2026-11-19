@@ -38,7 +38,7 @@ import {
   HardDrive,
   ArrowUpRight,
 } from 'lucide-react';
-import type { Page, Project, Tool } from './model';
+import type { Page, Project, Stroke, Tool } from './model';
 import { blankPage, clamp, drawStrokes, parseYoutubeUrl, uid } from './model';
 import {
   deleteProject,
@@ -190,6 +190,7 @@ export default function App() {
   const [projects, setProjects] = useState<Project[]>([]),
     [project, setProject] = useState<Project | null>(null),
     [initialized, setInitialized] = useState(false);
+  const [inkClipboard, setInkClipboard] = useState<Stroke[]>([]);
   const [tool, setTool] = useState<Tool>('pen'),
     [colorChoices, setColorChoices] = useState<Record<WritingTool, number | string>>({
       pen: 0,
@@ -1172,6 +1173,8 @@ export default function App() {
                   fitWidth={fitWidth}
                   zoom={zoom}
                   setZoom={setZoom}
+                  inkClipboard={inkClipboard}
+                  onCopyInk={setInkClipboard}
                   onChange={changePage}
                   onNavigate={navigate}
                   onError={setError}
@@ -1443,7 +1446,7 @@ export default function App() {
           <div className="help-content">
             <h3>書く・動かす</h3>
             <p>
-              Pencilまたはマウスで筆記。指1本は移動とページ送り、2本指はピンチで拡大縮小。「入力設定」で指による筆記も有効にできます。選択ツールでは線を囲み、選択した線をドラッグで移動できます。消しゴムは上部でサイズを選び、円が通った部分だけを消します。PDF本体は消えません。
+              Pencilまたはマウスで筆記。指1本は移動とページ送り、2本指はピンチで拡大縮小。「入力設定」で指による筆記も有効にできます。「選択」で筆記を囲むかタップすると、枠と操作メニューが出ます。枠内をドラッグすると移動、右下の角をドラッグすると拡大・縮小できます。コピーした筆記は同じタブ内の別ページにも貼り付けられます。消しゴムは上部でサイズを選び、円が通った部分だけを消します。PDF本体は消えません。
             </p>
             <h3>動画で伝える</h3>
             <p>
