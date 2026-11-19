@@ -316,6 +316,7 @@ test('backup restore, annotated PDF output and library rename/duplicate/delete',
   page,
 }) => {
   await demo(page);
+  await page.getByLabel('ペンの種類', { exact: true }).selectOption('pencil');
   await line(page);
   await page.getByRole('button', { name: 'YouTube挿入' }).click();
   await page.getByLabel('YouTube URL').fill('https://youtu.be/M7lc1UVf-VE');
@@ -331,6 +332,7 @@ test('backup restore, annotated PDF output and library rename/duplicate/delete',
   expect(meta.version).toBe(2);
   expect(meta.project.pages).toHaveLength(3);
   expect(meta.project.pages[0].strokes).toHaveLength(1);
+  expect(meta.project.pages[0].strokes[0].penKind).toBe('pencil');
   expect(meta.project.pages[0].videos).toHaveLength(1);
   expect(Object.keys(zip.files).some((name) => name.endsWith('.pdf'))).toBe(true);
   await page.locator('.export-menu>summary').click();
@@ -354,7 +356,12 @@ test('backup restore, annotated PDF output and library rename/duplicate/delete',
   });
   await expect(page.getByTestId('pdf-page')).toBeVisible();
   await saved(page);
-  expect(await stored(page)).toHaveLength(2);
+  const restored = await stored(page);
+  expect(restored).toHaveLength(2);
+  expect(restored.map((project) => project.pages[0].strokes[0].penKind)).toEqual([
+    'pencil',
+    'pencil',
+  ]);
   await page.getByRole('button', { name: 'ライブラリに戻る' }).click();
   await page.locator('.card-menu>summary').first().click();
   await page.getByRole('button', { name: '名前を変更' }).first().click();

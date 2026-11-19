@@ -1,6 +1,6 @@
 import { openDB } from 'idb';
 import JSZip from 'jszip';
-import { uid } from './model';
+import { isPenKind, uid } from './model';
 import type { Project, Page } from './model';
 import { videoPlacementBounds } from './video-layout';
 let connection: ReturnType<typeof openDB> | undefined;
@@ -98,6 +98,7 @@ export function validateProject(p: unknown): asserts p is Project {
         !s ||
         typeof s.id !== 'string' ||
         !['pen', 'highlighter'].includes(s.tool) ||
+        (s.penKind !== undefined && (s.tool !== 'pen' || !isPenKind(s.penKind))) ||
         !/^#[0-9a-f]{6}$/i.test(s.color) ||
         !finite(s.width, 0.1, 100) ||
         !Array.isArray(s.points) ||

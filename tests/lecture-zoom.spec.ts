@@ -420,8 +420,8 @@ test.describe('high-DPI PDF detail rendering', () => {
     expect(await opacity(x + 38, y - 55)).toBeGreaterThan(240);
     await live.evaluate((c) => (c.dataset.panFrame = 'true'));
     await page.mouse.move(x + 65, y + 26, { steps: 3 });
+    await expect.poll(() => opacity(x + 65, y - 51)).toBeGreaterThan(240);
     await expect(live).toHaveAttribute('data-pan-frame', 'true');
-    expect(await opacity(x + 65, y - 51)).toBeGreaterThan(240);
     await page.mouse.up();
     await expect(stage).not.toHaveAttribute('data-ink-preview');
     await expect(live).toHaveCount(0);

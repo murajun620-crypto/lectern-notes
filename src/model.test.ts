@@ -94,4 +94,29 @@ describe('backup validation', () => {
     ];
     expect(() => validateProject(p)).toThrow();
   });
+  it('accepts both legacy ink and the new pen kinds in a backup', () => {
+    const p = valid();
+    const stroke = {
+      id: 's',
+      tool: 'pen' as const,
+      color: '#000000',
+      width: 2,
+      points: [{ x: 15, y: 15, p: 0.5 }],
+    };
+    p.pages[0].strokes = [
+      stroke,
+      ...(['ballpoint', 'fountain', 'pencil', 'brush'] as const).map((penKind) => ({
+        ...stroke,
+        id: penKind,
+        penKind,
+      })),
+    ];
+    expect(() => validateProject(p)).not.toThrow();
+    expect(() =>
+      validateProject({
+        ...p,
+        pages: [{ ...p.pages[0], strokes: [{ ...stroke, penKind: 'unknown' }] }],
+      }),
+    ).toThrow();
+  });
 });

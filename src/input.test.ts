@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { effectiveTool, PalmGuard } from './input';
 import { enlargedVideoRect, initialVideoRect, playerViewport, resizeVideo } from './video-layout';
-import { penOutline, drawLaser, strokeCenterline } from './model';
+import { penKinds, penOutline, drawLaser, strokeCenterline } from './model';
 describe('automatic Pencil and finger routing', () => {
   it('keeps the last Pencil tool while hand mode remains available to mouse', () => {
     expect(effectiveTool('hand', 'pen', 'pen', false)).toBe('pen');
@@ -112,6 +112,24 @@ describe('smooth pressure-bearing stroke outline', () => {
     };
     expect(extent(0.001)).toBeGreaterThan(stroke.width * 0.72);
     expect(extent(0.85)).toBeGreaterThan(extent(0.1));
+  });
+  it('gives the fountain nib directional width and keeps dots visible for each pen', () => {
+    const samples = Array.from({ length: 20 }, (_, i) => i * 5);
+    const diagonal = (dx: number, dy: number) => {
+      const outline = penOutline({
+        ...stroke,
+        penKind: 'fountain',
+        points: samples.map((d) => ({ x: d * dx, y: d * dy, p: 0.5 })),
+      });
+      const perpendicular = outline.map(([x, y]) => -x * dy + y * dx);
+      return Math.max(...perpendicular) - Math.min(...perpendicular);
+    };
+    expect(diagonal(0.6, 0.8)).toBeGreaterThan(diagonal(0.8, -0.6) * 1.4);
+    for (const penKind of penKinds) {
+      const dot = penOutline({ ...stroke, penKind, points: [stroke.points[0]] });
+      expect(dot.length).toBeGreaterThan(4);
+      expect(dot.flat().every(Number.isFinite)).toBe(true);
+    }
   });
   it('interpolates sparse pen curves inside the contact span and preserves pressure and corners', () => {
     const points = [

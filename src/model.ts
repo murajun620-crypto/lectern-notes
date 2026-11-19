@@ -1,10 +1,15 @@
 import { getStroke } from 'perfect-freehand';
 export type Tool = 'pen' | 'highlighter' | 'eraser' | 'select' | 'laser' | 'hand';
+export const penKinds = ['ballpoint', 'fountain', 'pencil', 'brush'] as const;
+export type PenKind = (typeof penKinds)[number];
+export const isPenKind = (value: unknown): value is PenKind =>
+  penKinds.some((kind) => kind === value);
 export type Point = { x: number; y: number; p: number };
 export type Erasure = { id: string; width: number; points: Point[] };
 export type Stroke = {
   id: string;
   tool: 'pen' | 'highlighter';
+  penKind?: PenKind;
   color: string;
   width: number;
   points: Point[];
@@ -82,6 +87,8 @@ export function segmentDistance(p: Point, a: Point, b: Point) {
 }
 export function strokeHit(stroke: Stroke, point: Point, radius: number) {
   const points = strokeCenterline(stroke);
+  const reach =
+    stroke.width * (stroke.penKind === 'brush' || stroke.penKind === 'fountain' ? 0.95 : 0.5);
   return points.some((b, i) => {
     const a = points[Math.max(0, i - 1)],
       dx = b.x - a.x,
@@ -89,7 +96,7 @@ export function strokeHit(stroke: Stroke, point: Point, radius: number) {
     const t = clamp(((point.x - a.x) * dx + (point.y - a.y) * dy) / (dx * dx + dy * dy || 1), 0, 1);
     const nearest = { x: a.x + t * dx, y: a.y + t * dy, p: 0.5 };
     return (
-      Math.hypot(point.x - nearest.x, point.y - nearest.y) <= radius + stroke.width / 2 &&
+      Math.hypot(point.x - nearest.x, point.y - nearest.y) <= radius + reach &&
       !pointErased(stroke, nearest)
     );
   });
@@ -178,16 +185,35 @@ export function strokeCenterline(stroke: Stroke): Point[] {
   return result;
 }
 
+const thinningByPen = { ballpoint: 0.14, fountain: 0.82, pencil: 0.3, brush: 0.86 };
+
 export function penOutline(stroke: Stroke) {
+  const { penKind, width } = stroke;
+  const centerline = strokeCenterline(stroke);
+  const taper = penKind === 'brush' && centerline.length > 2;
   return getStroke(
-    strokeCenterline(stroke).map((p) => [p.x, p.y, Math.max(0.32, p.p)]),
+    centerline.map((p, i) => {
+      let pressure = Math.max(penKind === 'brush' ? 0.24 : 0.32, p.p);
+      if (penKind === 'fountain') {
+        // The angle of a broad nib changes the width even at a steady pressure.
+        const before = centerline[Math.max(0, i - 1)];
+        const after = centerline[Math.min(centerline.length - 1, i + 1)];
+        const dx = after.x - before.x;
+        const dy = after.y - before.y;
+        const length = Math.hypot(dx, dy);
+        const acrossNib = length ? Math.abs(0.6 * dx + 0.8 * dy) / length : 0.6;
+        pressure = 0.18 + (0.2 + 0.65 * acrossNib) * (0.6 + 0.4 * pressure);
+      }
+      return [p.x, p.y, pressure];
+    }),
     {
-      size: stroke.width,
-      thinning: 0.55,
+      size: width,
+      thinning: penKind ? (thinningByPen[penKind] ?? 0.55) : 0.55,
       smoothing: 0.65,
       streamline: 0.2,
       simulatePressure: false,
       last: true,
+      ...(taper && { start: { taper: width * 0.65 }, end: { taper: width * 2.6 } }),
     },
   );
 }
@@ -383,8 +409,46 @@ export function drawStrokes(ctx: CanvasRenderingContext2D, strokes: Stroke[]) {
       ctx.stroke(path);
     } else {
       ctx.fillStyle = stroke.color;
+      if (stroke.penKind === 'pencil') {
+        const grain = graphitePattern(ctx, stroke.color);
+        if (grain) ctx.fillStyle = grain;
+        else ctx.globalAlpha *= 0.62;
+      }
       ctx.fill(path);
     }
     ctx.restore();
   }
+}
+
+const graphitePatterns = new WeakMap<CanvasRenderingContext2D, Map<string, CanvasPattern>>();
+function graphitePattern(ctx: CanvasRenderingContext2D, color: string) {
+  let patterns = graphitePatterns.get(ctx);
+  if (!patterns) {
+    patterns = new Map();
+    graphitePatterns.set(ctx, patterns);
+  }
+  const cached = patterns.get(color);
+  if (cached) return cached;
+  const tile = ctx.canvas.ownerDocument.createElement('canvas');
+  tile.width = tile.height = 32;
+  const texture = tile.getContext('2d');
+  if (!texture) return null;
+  const rgba = texture.createImageData(tile.width, tile.height);
+  const rgb = Number.parseInt(color.slice(1), 16);
+  let seed = 173;
+  for (let i = 0; i < rgba.data.length; i += 4) {
+    seed = (Math.imul(1664525, seed) + 1013904223) >>> 0;
+    rgba.data[i] = rgb >>> 16;
+    rgba.data[i + 1] = (rgb >>> 8) & 255;
+    rgba.data[i + 2] = rgb & 255;
+    rgba.data[i + 3] = 62 + ((seed >>> 24) * 158) / 255;
+  }
+  texture.putImageData(rgba, 0, 0);
+  const pattern = ctx.createPattern(tile, 'repeat');
+  if (!pattern) return null;
+  // Keep the grain anchored to the PDF, including on zoom and export.
+  pattern.setTransform({ a: 0.38, d: 0.38 });
+  if (patterns.size >= 24) patterns.clear();
+  patterns.set(color, pattern);
+  return pattern;
 }
