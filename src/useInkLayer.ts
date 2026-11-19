@@ -161,8 +161,6 @@ export function useInkLayer({
     const stroke = draft.current;
     const canvas = draftCanvas.current;
     if (!canvas || !stroke || !geometry || interacting.current) return;
-    if (canvas.width !== geometry.width) canvas.width = geometry.width;
-    if (canvas.height !== geometry.height) canvas.height = geometry.height;
     const ctx = canvas.getContext('2d')!;
     const previous = draftArea.current;
     if (previous)
@@ -241,6 +239,12 @@ export function useInkLayer({
       pageWidth,
       pageHeight,
     };
+    const overlay = draftCanvas.current!;
+    if (overlay.width !== geometry.width || overlay.height !== geometry.height) {
+      if (overlay.width !== geometry.width) overlay.width = geometry.width;
+      if (overlay.height !== geometry.height) overlay.height = geometry.height;
+      draftArea.current = null;
+    }
     const last = lastRaster.current;
     const old = rasterGeometry.current;
     const otherPages = neighbors.filter((neighbor) => neighbor.page.id !== id);
