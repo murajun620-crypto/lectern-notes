@@ -1071,7 +1071,7 @@ h3 {
 }
 .ink-selection-menu {
   position: absolute;
-  display: flex;
+  display: grid;
   align-items: stretch;
   padding: 3px;
   border: 1px solid var(--line);
@@ -1079,11 +1079,9 @@ h3 {
   background: #fff;
   box-shadow: 0 3px 15px #0001;
   pointer-events: auto;
-  overflow-x: auto;
-  touch-action: pan-x;
+  touch-action: none;
 }
 .ink-selection-menu button {
-  flex: 1 0 43px;
   min-height: 43px;
   display: grid;
   justify-items: center;

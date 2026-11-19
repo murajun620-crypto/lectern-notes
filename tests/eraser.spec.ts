@@ -52,6 +52,7 @@ test.describe('selection actions', () => {
 
   test('resizes masked ink with a corner or buttons and copies it to another page', async ({
     page,
+    browserName,
   }) => {
     await demo(page);
     await page.getByRole('button', { name: '蛍光ペン', exact: true }).tap();
@@ -97,16 +98,29 @@ test.describe('selection actions', () => {
     const handle = (await page.getByTestId('ink-resize-handle').boundingBox())!;
     const x = handle.x + handle.width / 2;
     const y = handle.y + handle.height / 2;
-    await page.mouse.move(x, y);
-    await page.mouse.down();
-    await page.mouse.move(x + 45, y + 15, { steps: 6 });
-    await page.mouse.up();
+    if (browserName === 'chromium') {
+      const cdp = await page.context().newCDPSession(page);
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y }] });
+      for (let i = 1; i <= 6; i++)
+        await cdp.send('Input.dispatchTouchEvent', {
+          type: 'touchMove',
+          touchPoints: [{ x: x + (45 * i) / 6, y: y + (15 * i) / 6 }],
+        });
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    } else {
+      await page.mouse.move(x, y);
+      await page.mouse.down();
+      await page.mouse.move(x + 45, y + 15, { steps: 6 });
+      await page.mouse.up();
+    }
     await saved(page);
     const [resized] = await strokes();
     expect(resized.id).toBe(original.id);
     const factor = resized.width / original.width;
     expect(factor).toBeGreaterThan(1.15);
     assertScaled(resized, factor);
+    await menu.getByRole('button', { name: 'コピー', exact: true }).tap();
+    await expect(menu.getByRole('button', { name: '貼り付け', exact: true })).toBeVisible();
     await page.getByRole('button', { name: '元に戻す', exact: true }).tap();
     await saved(page);
     assertScaled((await strokes())[0], 1);
@@ -114,10 +128,9 @@ test.describe('selection actions', () => {
     await saved(page);
     assertScaled((await strokes())[0], factor);
 
-    await menu.getByRole('button', { name: 'コピー', exact: true }).tap();
-    await expect(menu.getByRole('button', { name: '貼り付け', exact: true })).toBeVisible();
     await menu.getByRole('button', { name: '複製', exact: true }).tap();
     await saved(page);
+    expect(await strokes()).toHaveLength(2);
     const duplicate = (await strokes())[1];
     assertScaled(duplicate, factor);
     expect(duplicate.id).not.toBe(original.id);
