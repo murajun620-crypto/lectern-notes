@@ -1235,7 +1235,7 @@ export default function App() {
                 <small>
                   {pencilDiagnostics
                     ? '記録中です。症状が出たら、このメニューから書き出せます。'
-                    : '筆記の抜けを調べるため、Pencilの相対位置と入力時刻を端末内だけで記録します。'}
+                    : 'Pencilの相対位置と、接触の種類・時刻を端末内で記録します。'}
                 </small>
                 <div className="preset-settings">
                   {Object.values(inkPalettes).map(({ label, preference }) => (

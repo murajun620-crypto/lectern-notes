@@ -914,6 +914,10 @@ export default function Stage({
       pencilFinish.current = { finish, timer: setTimeout(finish, 24) };
     }
   };
+  const endTouchPointerForPencil = (id: number) => {
+    const g = gesture.current;
+    if (g?.pencil?.touchId === id && !g.pencil.pointerEnded) endPencil(g, 'pointer');
+  };
   const preparePencil = () => {
     stopCoast();
     swipe.current = null;
@@ -1249,7 +1253,15 @@ export default function Stage({
           setSelectedVideo(null);
       }}
       onPointerMoveCapture={(e) => {
-        if (e.pointerType === 'touch' && !palm.current.allowsTouch(e.pointerId)) {
+        if (e.pointerType !== 'touch') return;
+        const g = gesture.current;
+        if (g?.pencil?.touchId === e.pointerId && !g.pencil.touchEnded) {
+          // The matching native stylus contact is stronger evidence than pointerType.
+          if (!g.pencil.pointerEnded && appendPencilSamples(e.nativeEvent, g))
+            previewStroke(g.stroke!);
+          e.preventDefault();
+          e.stopPropagation();
+        } else if (!palm.current.allowsTouch(e.pointerId)) {
           e.preventDefault();
           e.stopPropagation();
         }
@@ -1257,6 +1269,7 @@ export default function Stage({
       onPointerUpCapture={(e) => {
         if (e.pointerType === 'pen') palm.current.penUp(e.pointerId, performance.now());
         if (e.pointerType === 'touch') {
+          endTouchPointerForPencil(e.pointerId);
           const accepted = palm.current.allowsTouch(e.pointerId);
           palm.current.touchUp(e.pointerId, performance.now());
           if (!accepted) {
@@ -1267,7 +1280,10 @@ export default function Stage({
       }}
       onPointerCancelCapture={(e) => {
         if (e.pointerType === 'pen') palm.current.penUp(e.pointerId, performance.now());
-        if (e.pointerType === 'touch') palm.current.touchUp(e.pointerId);
+        if (e.pointerType === 'touch') {
+          endTouchPointerForPencil(e.pointerId);
+          palm.current.touchUp(e.pointerId);
+        }
       }}
       onClickCapture={(e) => {
         const pe = e.nativeEvent as PointerEvent;

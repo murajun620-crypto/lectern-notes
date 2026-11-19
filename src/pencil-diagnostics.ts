@@ -22,23 +22,36 @@ export function createPencilDiagnostics() {
   };
 
   const attach = (stage: HTMLElement) => {
+    const document = stage.ownerDocument;
     const pointerStarts = new Map<number, Contact>();
     const touchStarts = new Map<number, Contact>();
+    const inStage = (target: EventTarget | null) =>
+      target instanceof Node && stage.contains(target);
     const relative = (contact: Contact, start: Contact) => ({
       dx: round(contact.clientX - start.clientX),
       dy: round(contact.clientY - start.clientY),
     });
     const pointer = (event: PointerEvent) => {
-      if (event.pointerType !== 'pen') return;
-      const { pointerId: id, type } = event;
-      if (type === 'pointerdown') pointerStarts.set(id, event);
-      const start = pointerStarts.get(id);
-      if (!start) return;
-      const coalesced = event.getCoalescedEvents?.() ?? [];
-      record({
+      const { pointerId: id, pointerType, type } = event;
+      if (pointerType !== 'pen' && pointerType !== 'touch') return;
+      const entry = {
         type,
         id,
+        pointerType,
+        inStage: inStage(event.target),
         timeMs: round(event.timeStamp - startedAt),
+      };
+      if (type === 'pointerdown' && pointerType === 'pen' && entry.inStage)
+        pointerStarts.set(id, event);
+      const start = pointerStarts.get(id) ?? touchStarts.get(id);
+      if (!start || !entry.inStage) {
+        if (type !== 'pointermove') record(entry);
+        if (type === 'pointerup' || type === 'pointercancel') pointerStarts.delete(id);
+        return;
+      }
+      const coalesced = event.getCoalescedEvents?.() ?? [];
+      record({
+        ...entry,
         ...relative(event, start),
         pressure: event.pressure,
         buttons: event.buttons,
@@ -57,18 +70,25 @@ export function createPencilDiagnostics() {
       for (const contact of Array.from(event.changedTouches) as StylusTouch[]) {
         const { identifier: id, touchType, force } = contact;
         const { type } = event;
-        if (type === 'touchstart' && touchType === 'stylus') touchStarts.set(id, contact);
-        const start = touchStarts.get(id) ?? (touchType === 'stylus' ? contact : undefined);
-        if (!start) continue;
-        record({
+        const entry = {
           type,
           id,
+          touchType: touchType ?? 'unknown',
+          inStage: inStage(contact.target ?? event.target),
           timeMs: round(event.timeStamp - startedAt),
-          ...relative(contact, start),
-          force,
-          startedInStage: touchStarts.has(id),
           activeTouches: event.touches.length,
-        });
+        };
+        if (type === 'touchstart' && touchType === 'stylus' && entry.inStage)
+          touchStarts.set(id, contact);
+        const start = touchStarts.get(id) ?? (touchType === 'stylus' ? contact : undefined);
+        if (start && entry.inStage) {
+          record({
+            ...entry,
+            ...relative(contact, start),
+            force,
+            startedInStage: touchStarts.has(id),
+          });
+        } else if (type !== 'touchmove') record(entry);
         if (type === 'touchend' || type === 'touchcancel') touchStarts.delete(id);
       }
     };
@@ -81,12 +101,12 @@ export function createPencilDiagnostics() {
     ] as const;
     const touchEvents = ['touchstart', 'touchmove', 'touchend', 'touchcancel'] as const;
     for (const name of pointerEvents)
-      stage.addEventListener(name, pointer, { capture: true, passive: true });
+      document.addEventListener(name, pointer, { capture: true, passive: true });
     for (const name of touchEvents)
-      stage.addEventListener(name, touch, { capture: true, passive: true });
+      document.addEventListener(name, touch, { capture: true, passive: true });
     return () => {
-      for (const name of pointerEvents) stage.removeEventListener(name, pointer, true);
-      for (const name of touchEvents) stage.removeEventListener(name, touch, true);
+      for (const name of pointerEvents) document.removeEventListener(name, pointer, true);
+      for (const name of touchEvents) document.removeEventListener(name, touch, true);
     };
   };
 

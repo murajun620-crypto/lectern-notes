@@ -312,6 +312,16 @@ test.describe('Pencil contact samples', () => {
     await page.getByRole('button', { name: 'Pencil入力を記録', exact: true }).click();
     await stage.evaluate(
       (el, { x, y }) => {
+        const finger = (type: string) =>
+          document.body.dispatchEvent(
+            new PointerEvent(type, {
+              bubbles: true,
+              pointerType: 'touch',
+              pointerId: 47,
+              clientX: x,
+              clientY: y,
+            }),
+          );
         const pen = (type: string, dx: number) =>
           el.dispatchEvent(
             new PointerEvent(type, {
@@ -324,13 +334,13 @@ test.describe('Pencil contact samples', () => {
               buttons: type === 'pointerdown' ? 1 : 0,
             }),
           );
-        const touch = (type: string, dx: number) => {
+        const touch = (type: string, dx: number, touchType = 'stylus', identifier = 42) => {
           const event = new Event(type, { bubbles: true });
           const contact = {
-            identifier: 42,
+            identifier,
             clientX: x + dx,
             clientY: y,
-            touchType: 'stylus',
+            touchType,
             force: 0,
           };
           Object.defineProperties(event, {
@@ -339,6 +349,10 @@ test.describe('Pencil contact samples', () => {
           });
           el.dispatchEvent(event);
         };
+        finger('pointerdown');
+        finger('pointerup');
+        touch('touchstart', 0, 'direct', 48);
+        touch('touchend', 0, 'direct', 48);
         pen('pointerdown', 0);
         touch('touchstart', 0);
         touch('touchend', 6);
@@ -354,10 +368,14 @@ test.describe('Pencil contact samples', () => {
     const report = JSON.parse(await readFile(await file.path(), 'utf8'));
     expect(report.omitted).toBe(0);
     expect(report.events).toMatchObject([
-      { type: 'pointerdown', id: 42, dx: 0, dy: 0 },
-      { type: 'touchstart', id: 42, dx: 0, dy: 0 },
-      { type: 'touchend', id: 42, dx: 6, dy: 0 },
-      { type: 'pointerup', id: 42, dx: 35, dy: 0 },
+      { type: 'pointerdown', id: 47, pointerType: 'touch', inStage: false },
+      { type: 'pointerup', id: 47, pointerType: 'touch', inStage: false },
+      { type: 'touchstart', id: 48, touchType: 'direct', inStage: true },
+      { type: 'touchend', id: 48, touchType: 'direct', inStage: true },
+      { type: 'pointerdown', id: 42, pointerType: 'pen', inStage: true, dx: 0, dy: 0 },
+      { type: 'touchstart', id: 42, touchType: 'stylus', inStage: true, dx: 0, dy: 0 },
+      { type: 'touchend', id: 42, touchType: 'stylus', inStage: true, dx: 6, dy: 0 },
+      { type: 'pointerup', id: 42, pointerType: 'pen', inStage: true, dx: 35, dy: 0 },
       {
         type: 'strokeFinished',
         pointerId: 42,
@@ -368,6 +386,55 @@ test.describe('Pencil contact samples', () => {
         dy: 0,
       },
     ]);
+    for (const event of report.events.slice(0, 4)) expect(event).not.toHaveProperty('dx');
+  });
+
+  test('uses finger-classified moves only for a matching native stylus contact and stops at release', async ({
+    page,
+  }) => {
+    await demo(page);
+    const stage = page.getByTestId('stage');
+    await stage.evaluate(() => {
+      HTMLElement.prototype.setPointerCapture = () => {};
+    });
+    const paper = (await page.getByTestId('pdf-page').boundingBox())!;
+    const x = Math.round(paper.x + paper.width / 2);
+    const y = Math.round(paper.y + paper.height / 2);
+    const stylus = (dx: number) => ({
+      identifier: 50,
+      clientX: x + dx,
+      clientY: y,
+      touchType: 'stylus',
+      force: 0,
+    });
+    await pointer(page, 'pointerdown', 50, 'touch', x, y);
+    await nativeTouch(page, 'touchstart', [stylus(0)]);
+    for (const dx of [3, 7, 10])
+      await pointer(page, 'pointermove', 50, 'touch', x + dx, y, { buttons: 1, pressure: 0 });
+    await pointer(page, 'pointerup', 50, 'touch', x + 45, y + 20);
+    await pointer(page, 'pointermove', 50, 'touch', x + 52, y + 30);
+    await nativeTouch(page, 'touchend', [], [stylus(51)]);
+    await pointer(page, 'pointerdown', 51, 'touch', x, y);
+    await pointer(page, 'pointermove', 51, 'touch', x + 3, y);
+    await pointer(page, 'pointerup', 51, 'touch', x + 3, y);
+    await expect
+      .poll(async () => {
+        const pg = (await stored(page))[0]?.pages[0];
+        return pg?.strokes.map((s: { points: { x: number; y: number }[] }) =>
+          s.points.map((p) => [
+            Math.round(paper.x + (p.x * paper.width) / pg.width - x),
+            Math.round(paper.y + (p.y * paper.height) / pg.height - y),
+          ]),
+        );
+      })
+      .toEqual([
+        [
+          [0, 0],
+          [3, 0],
+          [7, 0],
+          [10, 0],
+        ],
+      ]);
   });
 
   test('holds the initial dot and recovers short Pencil marks from nearby native endpoints', async ({
