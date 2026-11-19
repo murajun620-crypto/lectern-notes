@@ -989,7 +989,8 @@ h3 {
   will-change: transform;
 }
 .ink-canvas,
-.ink-draft-canvas {
+.ink-draft-canvas,
+.ink-live-layer {
   position: absolute;
   inset: 0;
   width: 100%;
@@ -997,17 +998,26 @@ h3 {
   z-index: 2;
   pointer-events: none;
 }
-.ink-canvas {
+.ink-canvas,
+.ink-live-layer canvas {
   transform-origin: top left;
+}
+.ink-live-layer canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
 }
 .ink-page-preview,
 .stack-ink-canvas,
+.ink-live-layer,
+.stage[data-ink-preview='live'] > .ink-canvas,
 .stage[data-ink-preview='page'] > .ink-canvas,
 .stage[data-ink-preview='stack'] > .ink-canvas,
 .stage[data-ink-preview] > .ink-draft-canvas {
   visibility: hidden;
 }
 .stage[data-ink-preview='page'] .ink-page-preview,
+.stage[data-ink-preview='live'] .ink-live-layer,
 .stage[data-ink-preview='page'] .stack-paper:not([data-current='true']) .stack-ink-canvas,
 .stage[data-ink-preview='stack'] .stack-ink-canvas {
   visibility: visible;

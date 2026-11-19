@@ -16,6 +16,50 @@ type InkGeometry = {
   pageHeight: number;
 };
 
+type InkScene = { geometry: InkGeometry; strokes: Stroke[] }[];
+
+function projectInkFrame(
+  frame: { view: PageView; margin: number },
+  view: PageView,
+  size: { w: number; h: number },
+) {
+  const scale = view.zoom / frame.view.zoom;
+  const x = size.w / 2 + view.pan.x - (size.w / 2 + frame.view.pan.x + frame.margin) * scale;
+  const y = size.h / 2 + view.pan.y - (size.h / 2 + frame.view.pan.y + frame.margin) * scale;
+  const right = x + (size.w + frame.margin * 2) * scale;
+  const bottom = y + (size.h + frame.margin * 2) * scale;
+  const covers = x <= 0.5 && y <= 0.5 && right >= size.w - 0.5 && bottom >= size.h - 0.5;
+  return { x, y, scale, covers };
+}
+
+function inkScene(
+  geometry: InkGeometry,
+  strokes: Stroke[],
+  neighbors: StackPage[],
+  center: number,
+  zoom: number,
+  density: number,
+  origin: PageView['pan'],
+): InkScene {
+  const layers = [{ geometry, strokes: visibleStrokes(geometry, strokes) }];
+  for (const { page, fit, top } of neighbors) {
+    if (!page.strokes.length) continue;
+    const scale = fit * zoom * density;
+    const x = origin.x - (page.width * scale) / 2;
+    const y = origin.y + (top - center) * zoom * density;
+    if (
+      x >= geometry.width ||
+      x + page.width * scale <= 0 ||
+      y >= geometry.height ||
+      y + page.height * scale <= 0
+    )
+      continue;
+    const bounds = { ...geometry, x, y, scale, pageWidth: page.width, pageHeight: page.height };
+    layers.push({ geometry: bounds, strokes: visibleStrokes(bounds, page.strokes) });
+  }
+  return layers;
+}
+
 function inPage(ctx: CanvasRenderingContext2D, geometry: InkGeometry, draw: () => void) {
   ctx.save();
   const { scale, x, y, pageWidth, pageHeight } = geometry;
@@ -152,6 +196,34 @@ export function useInkLayer({
   const inkCanvas = useRef<HTMLCanvasElement>(null);
   const draftCanvas = useRef<HTMLCanvasElement>(null);
   const inkPreview = useRef<HTMLCanvasElement>(null);
+  const liveInk = useRef<HTMLDivElement>(null);
+  const liveFrame = useRef<{
+    canvas: HTMLCanvasElement;
+    view: PageView;
+    density: number;
+    margin: number;
+    id: string;
+    strokes: Stroke[];
+    neighbors: StackPage[];
+    center: number;
+    fit: number;
+    size: typeof size;
+  } | null>(null);
+  const liveTarget = useRef<PageView | null>(null);
+  const liveRequest = useRef<(() => void) | null>(null);
+  const liveAttempt = useRef<{ view: PageView; at: number } | null>(null);
+  const clearLiveInk = useCallback(() => {
+    liveRequest.current?.();
+    liveRequest.current = null;
+    liveAttempt.current = null;
+    liveTarget.current = null;
+    const canvas = liveFrame.current?.canvas;
+    if (canvas) {
+      canvas.remove();
+      canvas.width = canvas.height = 1;
+    }
+    liveFrame.current = null;
+  }, []);
   const rasterGeometry = useRef<InkGeometry | null>(null);
   const lastRaster = useRef<{
     id: string;
@@ -180,6 +252,7 @@ export function useInkLayer({
   const actualScale = fit * zoom;
   const ratio = Math.min(devicePixelRatio || 1, rasterScaleLimit(size.w, size.h));
   const { id, width: pageWidth, height: pageHeight, strokes: saved } = page;
+  useLayoutEffect(() => clearLiveInk, [id, saved, neighbors, center, fit, size, clearLiveInk]);
   const strokes = working || saved;
   const pageX = (size.w - pageWidth * actualScale) / 2 + pan.x;
   const pageY = (size.h - pageHeight * actualScale) / 2 + pan.y;
@@ -188,6 +261,123 @@ export function useInkLayer({
     2560 / Math.max(pageWidth, pageHeight),
   );
 
+  const matchingFrame = () => {
+    const frame = liveFrame.current;
+    return frame?.id === id &&
+      frame.strokes === saved &&
+      frame.neighbors === neighbors &&
+      frame.center === center &&
+      frame.fit === fit &&
+      frame.size === size
+      ? frame
+      : null;
+  };
+
+  const scheduleLiveInk = () => {
+    if (liveRequest.current || !interacting.current) return;
+    let scratch: HTMLCanvasElement | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let cancelFrame = () => {};
+    const cancel = () => {
+      clearTimeout(timer);
+      cancelFrame();
+      if (scratch) scratch.width = scratch.height = 1;
+      liveRequest.current = null;
+    };
+    liveRequest.current = cancel;
+    const start = () => {
+      const sample = liveTarget.current;
+      if (!interacting.current || !liveInk.current || !sample) return cancel();
+      liveAttempt.current = { view: sample, at: performance.now() };
+      const margin = Math.min(112, Math.round(Math.min(size.w, size.h) * 0.16));
+      const cssWidth = size.w + margin * 2;
+      const cssHeight = size.h + margin * 2;
+      const density = Math.min(
+        ratio * 1.12,
+        rasterScaleLimit(cssWidth, cssHeight),
+        Math.sqrt(5_000_000 / (cssWidth * cssHeight)),
+      );
+      const scale = fit * sample.zoom * density;
+      const width = Math.max(1, Math.round(cssWidth * density));
+      const height = Math.max(1, Math.round(cssHeight * density));
+      const origin = {
+        x: (cssWidth / 2 + sample.pan.x) * density,
+        y: (cssHeight / 2 + sample.pan.y) * density,
+      };
+      const geometry = {
+        width,
+        height,
+        scale,
+        pageWidth,
+        pageHeight,
+        x: origin.x - (pageWidth * scale) / 2,
+        y: origin.y - (pageHeight * scale) / 2,
+      };
+      const scene = inkScene(
+        geometry,
+        saved,
+        neighbors.filter((item) => item.page.id !== id),
+        center,
+        sample.zoom,
+        density,
+        origin,
+      );
+      if (scene.every((layer) => !layer.strokes.length)) return cancel();
+      const canvas = document.createElement('canvas');
+      scratch = canvas;
+      canvas.width = width;
+      canvas.height = height;
+      canvas.style.width = `${cssWidth}px`;
+      canvas.style.height = `${cssHeight}px`;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return cancel();
+      let layer = 0;
+      let offset = 0;
+      const step = () => {
+        if (!interacting.current || !liveInk.current || !liveTarget.current) return cancel();
+        const deadline = performance.now() + 3;
+        do {
+          const item = scene[layer];
+          const end = offset + 8;
+          inPage(ctx, item.geometry, () => drawStrokes(ctx, item.strokes.slice(offset, end)));
+          offset = end;
+          if (offset >= item.strokes.length) {
+            layer++;
+            offset = 0;
+          }
+        } while (layer < scene.length && performance.now() < deadline);
+        if (layer < scene.length) {
+          cancelFrame = afterViewportFrame(step);
+          return;
+        }
+        const old = liveFrame.current?.canvas;
+        liveInk.current.replaceChildren(canvas);
+        if (old) old.width = old.height = 1;
+        liveFrame.current = {
+          canvas,
+          view: sample,
+          density,
+          margin,
+          id,
+          strokes: saved,
+          neighbors,
+          center,
+          fit,
+          size,
+        };
+        scratch = undefined;
+        liveRequest.current = null;
+        paintInkPreview(liveTarget.current);
+      };
+      step();
+    };
+    const previous = liveAttempt.current;
+    const wait = previous ? 54 - (performance.now() - previous.at) : 0;
+    const queue = () => (cancelFrame = afterViewportFrame(start));
+    if (wait > 0) timer = setTimeout(queue, wait);
+    else queue();
+  };
+
   const paintInkPreview = (view: PageView) => {
     const stage = viewport.current;
     const canvas = inkCanvas.current;
@@ -195,6 +385,24 @@ export function useInkLayer({
     const paper = lastPreview.current;
     const screen = lastRaster.current;
     const paperReady = paper?.id === id && paper.strokes === saved && paper.scale === previewScale;
+    const frame = matchingFrame();
+    liveTarget.current = view;
+    const anchor = liveAttempt.current?.view ?? frame?.view ?? screen ?? { zoom, pan };
+    const travel = Math.hypot(view.pan.x - anchor.pan.x, view.pan.y - anchor.pan.y);
+    const panDistance = frame ? Math.max(28, frame.margin / 2) : 16;
+    if (
+      (saved.length || neighbors.some((item) => item.page.strokes.length)) &&
+      (view.zoom >= anchor.zoom * 1.3 || travel >= panDistance)
+    )
+      scheduleLiveInk();
+    if (frame) {
+      const projection = projectInkFrame(frame, view, size);
+      if (projection.covers) {
+        frame.canvas.style.transform = `translate3d(${projection.x}px, ${projection.y}px, 0) scale(${projection.scale})`;
+        stage.setAttribute('data-ink-preview', 'live');
+        return;
+      }
+    }
     if (screen?.id === id && screen.size === size && saved.length > 0) {
       const magnification = (fit * view.zoom) / (screen.fit * screen.zoom);
       const x = size.w / 2 + view.pan.x - (size.w / 2 + screen.pan.x) * magnification;
@@ -372,34 +580,35 @@ export function useInkLayer({
       if (sameView && !erasing.current) {
         paintChanges(canvas.getContext('2d')!, geometry, last.strokes, strokes);
         canvas.style.transform = '';
+        clearLiveInk();
         viewport.current?.removeAttribute('data-ink-preview');
         return;
       }
       const ctx = clearCanvas(canvas, geometry.width, geometry.height);
-      inPage(ctx, geometry, () => drawStrokes(ctx, visibleStrokes(geometry, strokes)));
-      for (const { page: neighbor, fit: neighborFit, top } of otherPages) {
-        if (!neighbor.strokes.length) continue;
-        const scale = neighborFit * zoom * ratio;
-        const x = (size.w / 2 + pan.x) * ratio - (neighbor.width * scale) / 2;
-        const y = (size.h / 2 + pan.y + (top - center) * zoom) * ratio;
-        if (
-          x >= geometry.width ||
-          x + neighbor.width * scale <= 0 ||
-          y >= geometry.height ||
-          y + neighbor.height * scale <= 0
-        )
-          continue;
-        const neighborGeometry = {
-          ...geometry,
-          scale,
-          x,
-          y,
-          pageWidth: neighbor.width,
-          pageHeight: neighbor.height,
-        };
-        inPage(ctx, neighborGeometry, () =>
-          drawStrokes(ctx, visibleStrokes(neighborGeometry, neighbor.strokes)),
+      const live = matchingFrame();
+      const projected = live && projectInkFrame(live, { zoom, pan }, size);
+      if (
+        live &&
+        live.strokes === strokes &&
+        projected?.covers &&
+        live.density / projected.scale >= ratio
+      ) {
+        const pixels = live.density / projected.scale;
+        ctx.drawImage(
+          live.canvas,
+          -projected.x * pixels,
+          -projected.y * pixels,
+          size.w * pixels,
+          size.h * pixels,
+          0,
+          0,
+          geometry.width,
+          geometry.height,
         );
+      } else {
+        const origin = { x: (size.w / 2 + pan.x) * ratio, y: (size.h / 2 + pan.y) * ratio };
+        const scene = inkScene(geometry, strokes, otherPages, center, zoom, ratio, origin);
+        for (const item of scene) inPage(ctx, item.geometry, () => drawStrokes(ctx, item.strokes));
       }
       if (erasing.current) {
         erasing.current.painted = 0;
@@ -407,6 +616,7 @@ export function useInkLayer({
         paintErasure();
       }
       canvas.style.transform = '';
+      clearLiveInk();
       viewport.current?.removeAttribute('data-ink-preview');
     };
     const last = lastRaster.current;
@@ -438,6 +648,7 @@ export function useInkLayer({
     settled,
     eraseRevision,
     interacting,
+    clearLiveInk,
     viewport,
     paintErasure,
     neighbors,
@@ -520,6 +731,8 @@ export function useInkLayer({
     inkCanvas,
     draftCanvas,
     inkPreview,
+    liveInk,
+    preparingLiveInk: () => liveRequest.current !== null,
     paintInkPreview,
     previewStroke,
     clearDraft,

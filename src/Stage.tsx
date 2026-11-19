@@ -167,12 +167,17 @@ export default function Stage({
   } | null>(null);
   const lasers = useRef<{ x: number; y: number; t: number }[]>([]);
   const paintPreview = useRef<(view: PageView) => void>(() => {});
+  const observePdf = useRef<(view: PageView) => void>(() => {});
+  const preparingInk = useRef<() => boolean>(() => false);
   const showInkPreview = useCallback(() => {
     const stage = viewport.current;
     if (stage && !stage.hasAttribute('data-ink-preview'))
       stage.setAttribute('data-ink-preview', '');
   }, []);
-  const paintInkPreview = useCallback((view: PageView) => paintPreview.current(view), []);
+  const paintOverlays = useCallback((view: PageView) => {
+    paintPreview.current(view);
+    observePdf.current(view);
+  }, []);
   const stack = usePageStack(continuousPages, page, size, fitWidth, onFocusPage);
   const { fit, contentBounds, paintStack, pagePosition, settleStack, takePagePan } = stack;
   const {
@@ -200,17 +205,16 @@ export default function Stage({
     zoom,
     setZoom,
     showInkPreview,
-    paintInkPreview,
+    paintOverlays,
     paintStack,
     pagePosition,
     settleStack,
     takePagePan,
   });
-  const pdfBusy = useCallback(
-    () => interacting.current || inkPriority.isBusy(),
-    [interacting, inkPriority],
-  );
-  usePdfDetail({
+  const penBusy = inkPriority.isBusy;
+  const pdfBusy = useCallback(() => interacting.current || penBusy(), [interacting, penBusy]);
+  const livePdfBusy = useCallback(() => penBusy() || preparingInk.current(), [penBusy]);
+  observePdf.current = usePdfDetail({
     page,
     fit,
     zoom,
@@ -218,13 +222,17 @@ export default function Stage({
     size,
     baseScale: rasterScale,
     view,
+    interacting,
     isBusy: pdfBusy,
+    liveBusy: livePdfBusy,
     showDetail,
   });
   const {
     inkCanvas,
     draftCanvas,
     inkPreview,
+    liveInk,
+    preparingLiveInk,
     paintInkPreview: paintInk,
     previewStroke,
     clearDraft,
@@ -246,6 +254,7 @@ export default function Stage({
     shouldPausePreview: pdfBusy,
   });
   paintPreview.current = paintInk;
+  preparingInk.current = preparingLiveInk;
   const clearInkGesture = useCallback(() => {
     inkPriority.end();
     clearDraft();
@@ -1252,6 +1261,7 @@ export default function Stage({
       <div ref={detail} className="pdf-detail-layer" aria-hidden="true" />
       <canvas ref={inkCanvas} className="ink-canvas" data-testid="ink-canvas" aria-hidden="true" />
       <canvas ref={draftCanvas} className="ink-draft-canvas" aria-hidden="true" />
+      <div ref={liveInk} className="ink-live-layer" aria-hidden="true" />
       <div
         ref={paper}
         className="pdf-page"

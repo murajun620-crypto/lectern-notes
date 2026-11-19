@@ -353,6 +353,80 @@ test('video placement and inline player stay aligned after compositor zoom', asy
 test.describe('high-DPI PDF detail rendering', () => {
   test.use({ viewport: { width: 1024, height: 768 }, deviceScaleFactor: 2 });
 
+  test('large pinches and panning show sharp ink while the gesture is held', async ({ page }) => {
+    await demo(page);
+    await page.getByLabel('ページ表示').selectOption('single');
+    const zoom = page.getByLabel('表示倍率');
+    await zoom.selectOption('2');
+    const stage = page.getByTestId('stage');
+    const detail = page.locator('.pdf-detail-surface canvas');
+    await expect(detail).toBeVisible();
+    await detail.evaluate((canvas) => (canvas.dataset.startZoom = 'true'));
+    const rect = (await stage.boundingBox())!;
+    const x = rect.x + rect.width / 2;
+    const y = rect.y + rect.height / 2;
+    await page.mouse.move(x - 95, y - 44);
+    await page.mouse.down();
+    await page.mouse.move(x + 95, y - 44, { steps: 15 });
+    await page.mouse.up();
+
+    const contacts = (d: number) => [
+      { identifier: 1, clientX: x - d, clientY: y },
+      { identifier: 2, clientX: x + d, clientY: y },
+    ];
+    const live = stage.locator('.ink-live-layer canvas');
+    const opacity = (cx: number, cy: number) =>
+      live.evaluate(
+        (c: HTMLCanvasElement, at) => {
+          const r = c.getBoundingClientRect();
+          const px = Math.round(((at.x - r.left) * c.width) / r.width);
+          const py = Math.round(((at.y - r.top) * c.height) / r.height);
+          return c.getContext('2d')!.getImageData(px, py, 1, 1).data[3];
+        },
+        { x: cx, y: cy },
+      );
+    await touch(page, 'touchstart', contacts(40));
+    await touch(page, 'touchmove', contacts(70));
+    await expect(stage).toHaveAttribute('data-ink-preview', 'live');
+    expect(await opacity(x, y - 77)).toBeGreaterThan(240);
+    await expect(detail).not.toHaveAttribute('data-start-zoom');
+    await expect(page.locator('.pdf-detail-surface')).toHaveCSS('transform', 'none');
+    await expect(zoom).toHaveValue('2');
+    const releasePreview = await stage.evaluate(async (el, changedTouches) => {
+      const event = new Event('touchend', { bubbles: true, cancelable: true });
+      Object.defineProperties(event, {
+        touches: { value: [] },
+        changedTouches: { value: changedTouches },
+      });
+      const frame = new Promise((resolve) =>
+        requestAnimationFrame(() => resolve(el.dataset.inkPreview)),
+      );
+      el.dispatchEvent(event);
+      return frame;
+    }, contacts(70));
+    expect(releasePreview).toBe('live');
+    await expect(zoom).toHaveValue('3.5');
+    await expect(stage).not.toHaveAttribute('data-ink-preview');
+
+    await page.getByRole('button', { name: '移動', exact: true }).click();
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(x + 38, y + 22, { steps: 5 });
+    await expect(stage).toHaveAttribute('data-ink-preview', 'live');
+    const panDensity = await live.evaluate(
+      (c: HTMLCanvasElement) => c.width / c.getBoundingClientRect().width,
+    );
+    expect(panDensity).toBeGreaterThanOrEqual(2);
+    expect(await opacity(x + 38, y - 55)).toBeGreaterThan(240);
+    await live.evaluate((c) => (c.dataset.panFrame = 'true'));
+    await page.mouse.move(x + 65, y + 26, { steps: 3 });
+    await expect(live).toHaveAttribute('data-pan-frame', 'true');
+    expect(await opacity(x + 65, y - 51)).toBeGreaterThan(240);
+    await page.mouse.up();
+    await expect(stage).not.toHaveAttribute('data-ink-preview');
+    await expect(live).toHaveCount(0);
+  });
+
   test('a same-page pinch keeps high-resolution PDF and uses the sharper ink pixels', async ({
     page,
   }) => {

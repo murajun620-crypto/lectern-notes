@@ -42,7 +42,7 @@ export function usePageViewport({
   zoom,
   setZoom,
   showInkPreview,
-  paintInkPreview,
+  paintOverlays,
   paintStack,
   pagePosition,
   settleStack,
@@ -60,7 +60,7 @@ export function usePageViewport({
   zoom: number;
   setZoom: (z: number) => void;
   showInkPreview: () => void;
-  paintInkPreview: (view: PageView) => void;
+  paintOverlays: (view: PageView) => void;
   paintStack: (view: PageView) => void;
   pagePosition: (id: string) => { fit: number; offset: number } | undefined;
   settleStack: (view: PageView) => void;
@@ -124,7 +124,7 @@ export function usePageViewport({
     if (paper.current) paper.current.style.transform = transform;
     if (backdrop.current) backdrop.current.style.transform = `translate(-50%, -50%) ${transform}`;
     paintStack(current);
-    paintInkPreview(current);
+    paintOverlays(current);
     for (const previous of detailViews.current) {
       const position =
         previous.pageId === pageId ? { fit, offset: 0 } : pagePosition(previous.pageId);
@@ -143,13 +143,13 @@ export function usePageViewport({
       previous.surface.style.transform =
         ratio === 1 && x === 0 && y === 0 ? '' : `translate3d(${x}px, ${y}px, 0) scale(${ratio})`;
     }
-  }, [backdrop, fit, pageId, paper, paintInkPreview, paintStack, pagePosition, size.w, size.h]);
+  }, [backdrop, fit, pageId, paper, paintOverlays, paintStack, pagePosition, size.w, size.h]);
   const releaseDetail = useCallback((item: (typeof detailViews.current)[number]) => {
     item.surface.remove();
     item.canvas.width = item.canvas.height = 1;
   }, []);
   const showDetail = useCallback(
-    (canvas: HTMLCanvasElement) => {
+    (canvas: HTMLCanvasElement, sample: PageView) => {
       const layer = detail.current;
       if (!layer) return;
       const keep = detailViews.current.find((item) => item.pageId !== pageId);
@@ -164,7 +164,7 @@ export function usePageViewport({
       layer.append(surface);
       for (const item of detailViews.current) if (!retained.includes(item)) releaseDetail(item);
       detailViews.current = [
-        { canvas, surface, view: view.current, pageId, fit, w: size.w, h: size.h },
+        { canvas, surface, view: sample, pageId, fit, w: size.w, h: size.h },
         ...retained,
       ];
       paint();
