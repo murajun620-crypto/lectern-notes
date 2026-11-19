@@ -4,6 +4,7 @@ import { changedStrokeBounds, drawStrokes, strokeBounds, strokeShape } from './m
 import type { Page, Point, Stroke } from './model';
 import type { StackPage } from './page-stack';
 import { rasterScaleLimit } from './usePageViewport';
+import type { PageView } from './usePageViewport';
 
 type InkGeometry = {
   width: number;
@@ -143,8 +144,12 @@ export function useInkLayer({
     neighbors: StackPage[];
     center: number;
     zoom: number;
+    pan: PageView['pan'];
+    fit: number;
+    size: typeof size;
   } | null>(null);
   const lastPreview = useRef<{ id: string; strokes: Stroke[]; scale: number } | null>(null);
+  const pendingInk = useRef<(() => void) | null>(null);
   const draft = useRef<Stroke | null>(null);
   const draftFrame = useRef<number | null>(null);
   const draftArea = useRef<InkBounds | null>(null);
@@ -163,6 +168,35 @@ export function useInkLayer({
   const strokes = working || saved;
   const pageX = (size.w - pageWidth * actualScale) / 2 + pan.x;
   const pageY = (size.h - pageHeight * actualScale) / 2 + pan.y;
+  const previewScale = Math.min(
+    fit * (devicePixelRatio || 1),
+    2048 / Math.max(pageWidth, pageHeight),
+  );
+
+  const paintInkPreview = (view: PageView) => {
+    const stage = viewport.current;
+    const canvas = inkCanvas.current;
+    if (!canvas || !stage?.hasAttribute('data-ink-preview')) return;
+    const paper = lastPreview.current;
+    const screen = lastRaster.current;
+    const paperReady = paper?.id === id && paper.strokes === saved && paper.scale === previewScale;
+    if (
+      screen?.id === id &&
+      screen.size === size &&
+      ((!paperReady && saved.length > 0) || stage.getAttribute('data-ink-preview') === 'screen')
+    ) {
+      const ratio = (fit * view.zoom) / (screen.fit * screen.zoom);
+      const x = size.w / 2 + view.pan.x - (size.w / 2 + screen.pan.x) * ratio;
+      const y = size.h / 2 + view.pan.y - (size.h / 2 + screen.pan.y) * ratio;
+      canvas.style.transform = `translate3d(${x}px, ${y}px, 0) scale(${ratio})`;
+      stage.setAttribute('data-ink-preview', 'screen');
+    } else {
+      canvas.style.transform = '';
+      stage.setAttribute('data-ink-preview', paperReady ? 'page' : 'stack');
+    }
+  };
+
+  const flushInk = useCallback(() => pendingInk.current?.(), []);
 
   const clearDraft = useCallback(() => {
     if (draftFrame.current !== null) cancelAnimationFrame(draftFrame.current);
@@ -179,6 +213,7 @@ export function useInkLayer({
   }, []);
   const paintDraft = useCallback(() => {
     draftFrame.current = null;
+    flushInk();
     const geometry = rasterGeometry.current;
     const stroke = draft.current;
     const canvas = draftCanvas.current;
@@ -204,7 +239,7 @@ export function useInkLayer({
     if (damage.right <= damage.left || damage.bottom <= damage.top) return;
     ctx.clearRect(damage.left, damage.top, damage.right - damage.left, damage.bottom - damage.top);
     inPixels(ctx, damage, () => inPage(ctx, geometry, () => drawStrokes(ctx, [stroke])));
-  }, [interacting]);
+  }, [flushInk, interacting]);
   const previewStroke = (stroke: Stroke) => {
     draft.current = stroke;
     if (draftFrame.current === null) draftFrame.current = requestAnimationFrame(paintDraft);
@@ -238,6 +273,7 @@ export function useInkLayer({
   }, [interacting]);
 
   const previewErasure = (points: Point[], width: number) => {
+    flushInk();
     if (erasing.current?.points !== points) erasing.current = { points, width, painted: 0 };
     if (eraseFrame.current === null) eraseFrame.current = requestAnimationFrame(paintErasure);
   };
@@ -259,86 +295,111 @@ export function useInkLayer({
   );
 
   useLayoutEffect(() => {
-    // No paint work during pinch/pan. The cached page preview follows the PDF transform.
     if (interacting.current) return;
-    const geometry = {
-      width: Math.max(1, Math.round(size.w * ratio)),
-      height: Math.max(1, Math.round(size.h * ratio)),
-      scale: actualScale * ratio,
-      x: pageX * ratio,
-      y: pageY * ratio,
-      pageWidth,
-      pageHeight,
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const paint = () => {
+      clearTimeout(timer);
+      if (interacting.current) {
+        timer = setTimeout(paint, 80);
+        return;
+      }
+      pendingInk.current = null;
+      paintScreen();
     };
-    const overlay = draftCanvas.current!;
-    if (overlay.width !== geometry.width || overlay.height !== geometry.height) {
-      if (overlay.width !== geometry.width) overlay.width = geometry.width;
-      if (overlay.height !== geometry.height) overlay.height = geometry.height;
-      draftArea.current = null;
-      draftPaint.current = null;
-    }
-    const last = lastRaster.current;
-    const old = rasterGeometry.current;
-    const otherPages = neighbors.filter((neighbor) => neighbor.page.id !== id);
-    const canvas = inkCanvas.current!;
-    const sameView =
-      last?.id === id &&
-      old &&
-      old.x === geometry.x &&
-      old.y === geometry.y &&
-      old.width === geometry.width &&
-      old.height === geometry.height &&
-      old.scale === geometry.scale &&
-      old.pageWidth === pageWidth &&
-      old.pageHeight === pageHeight &&
-      last.center === center &&
-      last.zoom === zoom &&
-      last.neighbors.length === otherPages.length &&
-      otherPages.every((neighbor, i) => {
-        const prev = last.neighbors[i];
-        return (
-          prev.page === neighbor.page && prev.fit === neighbor.fit && prev.top === neighbor.top
-        );
-      });
-    lastRaster.current = { id, strokes, neighbors: otherPages, center, zoom };
-    rasterGeometry.current = geometry;
-    if (sameView && !erasing.current) {
-      paintChanges(canvas.getContext('2d')!, geometry, last.strokes, strokes);
-      viewport.current?.removeAttribute('data-ink-preview');
-      return;
-    }
-    const ctx = clearCanvas(canvas, geometry.width, geometry.height);
-    inPage(ctx, geometry, () => drawStrokes(ctx, visibleStrokes(geometry, strokes)));
-    for (const { page: neighbor, fit: neighborFit, top } of otherPages) {
-      if (!neighbor.strokes.length) continue;
-      const scale = neighborFit * zoom * ratio;
-      const x = (size.w / 2 + pan.x) * ratio - (neighbor.width * scale) / 2;
-      const y = (size.h / 2 + pan.y + (top - center) * zoom) * ratio;
-      if (
-        x >= geometry.width ||
-        x + neighbor.width * scale <= 0 ||
-        y >= geometry.height ||
-        y + neighbor.height * scale <= 0
-      )
-        continue;
-      const neighborGeometry = {
-        ...geometry,
-        scale,
-        x,
-        y,
-        pageWidth: neighbor.width,
-        pageHeight: neighbor.height,
+    const paintScreen = () => {
+      const geometry = {
+        width: Math.max(1, Math.round(size.w * ratio)),
+        height: Math.max(1, Math.round(size.h * ratio)),
+        scale: actualScale * ratio,
+        x: pageX * ratio,
+        y: pageY * ratio,
+        pageWidth,
+        pageHeight,
       };
-      inPage(ctx, neighborGeometry, () =>
-        drawStrokes(ctx, visibleStrokes(neighborGeometry, neighbor.strokes)),
-      );
-    }
-    if (erasing.current) {
-      erasing.current.painted = 0;
-      if (eraseFrame.current !== null) cancelAnimationFrame(eraseFrame.current);
-      paintErasure();
-    }
-    viewport.current?.removeAttribute('data-ink-preview');
+      const overlay = draftCanvas.current!;
+      if (overlay.width !== geometry.width || overlay.height !== geometry.height) {
+        if (overlay.width !== geometry.width) overlay.width = geometry.width;
+        if (overlay.height !== geometry.height) overlay.height = geometry.height;
+        draftArea.current = null;
+        draftPaint.current = null;
+      }
+      const last = lastRaster.current;
+      const old = rasterGeometry.current;
+      const otherPages = neighbors.filter((neighbor) => neighbor.page.id !== id);
+      const canvas = inkCanvas.current!;
+      const sameView =
+        last?.id === id &&
+        old &&
+        old.x === geometry.x &&
+        old.y === geometry.y &&
+        old.width === geometry.width &&
+        old.height === geometry.height &&
+        old.scale === geometry.scale &&
+        old.pageWidth === pageWidth &&
+        old.pageHeight === pageHeight &&
+        last.center === center &&
+        last.zoom === zoom &&
+        last.neighbors.length === otherPages.length &&
+        otherPages.every((neighbor, i) => {
+          const prev = last.neighbors[i];
+          return (
+            prev.page === neighbor.page && prev.fit === neighbor.fit && prev.top === neighbor.top
+          );
+        });
+      lastRaster.current = { id, strokes, neighbors: otherPages, center, zoom, pan, fit, size };
+      rasterGeometry.current = geometry;
+      if (sameView && !erasing.current) {
+        paintChanges(canvas.getContext('2d')!, geometry, last.strokes, strokes);
+        canvas.style.transform = '';
+        viewport.current?.removeAttribute('data-ink-preview');
+        return;
+      }
+      const ctx = clearCanvas(canvas, geometry.width, geometry.height);
+      inPage(ctx, geometry, () => drawStrokes(ctx, visibleStrokes(geometry, strokes)));
+      for (const { page: neighbor, fit: neighborFit, top } of otherPages) {
+        if (!neighbor.strokes.length) continue;
+        const scale = neighborFit * zoom * ratio;
+        const x = (size.w / 2 + pan.x) * ratio - (neighbor.width * scale) / 2;
+        const y = (size.h / 2 + pan.y + (top - center) * zoom) * ratio;
+        if (
+          x >= geometry.width ||
+          x + neighbor.width * scale <= 0 ||
+          y >= geometry.height ||
+          y + neighbor.height * scale <= 0
+        )
+          continue;
+        const neighborGeometry = {
+          ...geometry,
+          scale,
+          x,
+          y,
+          pageWidth: neighbor.width,
+          pageHeight: neighbor.height,
+        };
+        inPage(ctx, neighborGeometry, () =>
+          drawStrokes(ctx, visibleStrokes(neighborGeometry, neighbor.strokes)),
+        );
+      }
+      if (erasing.current) {
+        erasing.current.painted = 0;
+        if (eraseFrame.current !== null) cancelAnimationFrame(eraseFrame.current);
+        paintErasure();
+      }
+      canvas.style.transform = '';
+      viewport.current?.removeAttribute('data-ink-preview');
+    };
+    const last = lastRaster.current;
+    if (
+      viewport.current?.hasAttribute('data-ink-preview') &&
+      (last?.id !== id || last.strokes === strokes)
+    ) {
+      pendingInk.current = paint;
+      timer = setTimeout(paint, 80);
+    } else paint();
+    return () => {
+      clearTimeout(timer);
+      if (pendingInk.current === paint) pendingInk.current = null;
+    };
   }, [
     id,
     pageWidth,
@@ -347,6 +408,7 @@ export function useInkLayer({
     size.h,
     ratio,
     actualScale,
+    fit,
     pageX,
     pageY,
     strokes,
@@ -365,7 +427,7 @@ export function useInkLayer({
   const prepareInkPreview = useCallback(() => {
     const canvas = inkPreview.current;
     if (!canvas) return;
-    const scale = Math.min(fit * (devicePixelRatio || 1), 2048 / Math.max(pageWidth, pageHeight));
+    const scale = previewScale;
     const width = saved.length ? Math.max(1, Math.round(pageWidth * scale)) : 1;
     const height = saved.length ? Math.max(1, Math.round(pageHeight * scale)) : 1;
     const geometry = { width, height, scale, x: 0, y: 0, pageWidth, pageHeight };
@@ -382,7 +444,7 @@ export function useInkLayer({
       const ctx = clearCanvas(canvas, width, height);
       inPage(ctx, geometry, () => drawStrokes(ctx, saved));
     }
-  }, [id, saved, fit, pageWidth, pageHeight]);
+  }, [id, saved, previewScale, pageWidth, pageHeight]);
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout>;
     const refresh = () => {
@@ -394,6 +456,7 @@ export function useInkLayer({
   }, [prepareInkPreview, shouldPausePreview]);
 
   useLayoutEffect(() => {
+    if (lasso.length) flushInk();
     const geometry = rasterGeometry.current;
     if (!geometry || interacting.current) return;
     if (!lasso.length) {
@@ -427,13 +490,14 @@ export function useInkLayer({
     settled,
     lasso,
     interacting,
+    flushInk,
   ]);
 
   return {
     inkCanvas,
     draftCanvas,
     inkPreview,
-    prepareInkPreview,
+    paintInkPreview,
     previewStroke,
     clearDraft,
     previewErasure,

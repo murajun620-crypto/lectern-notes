@@ -982,6 +982,12 @@ h3 {
   position: absolute;
   display: block;
 }
+.pdf-detail-surface {
+  position: absolute;
+  inset: 0;
+  transform-origin: top left;
+  will-change: transform;
+}
 .ink-canvas,
 .ink-draft-canvas {
   position: absolute;
@@ -993,12 +999,14 @@ h3 {
 }
 .ink-page-preview,
 .stack-ink-canvas,
-.stage[data-ink-preview] > .ink-canvas,
+.stage[data-ink-preview='page'] > .ink-canvas,
+.stage[data-ink-preview='stack'] > .ink-canvas,
 .stage[data-ink-preview] > .ink-draft-canvas {
   visibility: hidden;
 }
-.stage[data-ink-preview] .ink-page-preview,
-.stage[data-ink-preview] .stack-ink-canvas {
+.stage[data-ink-preview='page'] .ink-page-preview,
+.stage[data-ink-preview='page'] .stack-paper:not([data-current='true']) .stack-ink-canvas,
+.stage[data-ink-preview='stack'] .stack-ink-canvas {
   visibility: visible;
 }
 .laser-canvas {

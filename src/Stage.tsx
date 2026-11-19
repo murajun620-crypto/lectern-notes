@@ -9,6 +9,7 @@ import type { RegisterPlayback } from './VideoBox';
 import { effectiveTool, PalmGuard } from './input';
 import type { InkPriority, PencilTool } from './input';
 import { clampPageZoom, usePageViewport } from './usePageViewport';
+import type { PageView } from './usePageViewport';
 import { useInkLayer } from './useInkLayer';
 import { usePdfDetail } from './usePdfDetail';
 import { usePageStack } from './usePageStack';
@@ -27,6 +28,7 @@ import type { InkSelection, Position } from './ink-selection';
 type InkTransform = ReturnType<typeof selectionTransform>;
 type GestureKind = 'draw' | 'erase' | 'lasso' | 'move' | 'resize' | 'pan' | 'laser';
 type StylusTouch = { touchType?: string; force?: number };
+type Pinch = { distance: number; zoom: number; mid: Position; anchor: Position };
 const changeSelection = (strokes: Stroke[], ids: Set<string>, { scale, x, y }: InkTransform) =>
   strokes.map((stroke) => (ids.has(stroke.id) ? transformStroke(stroke, scale, x, y) : stroke));
 
@@ -137,19 +139,17 @@ export default function Stage({
     erasure?: { id: string; width: number };
   } | null>(null);
   const stylusContact = useRef<number | null>(null);
-  const touches = useRef(new Map<number, { x: number; y: number }>()),
-    pinch = useRef<{ distance: number; zoom: number; anchor: { x: number; y: number } } | null>(
-      null,
-    );
+  const touches = useRef(new Map<number, Position>()),
+    pinch = useRef<Pinch | null>(null);
   const palm = useRef(new PalmGuard());
-  const nativePinch = useRef<{
-    ids: [number, number];
-    distance: number;
-    zoom: number;
-    anchor: { x: number; y: number };
-    starts: Map<number, { x: number; y: number }>;
-    ending: boolean;
-  } | null>(null);
+  const nativePinch = useRef<
+    | (Pinch & {
+        ids: [number, number];
+        starts: Map<number, { x: number; y: number }>;
+        ending: boolean;
+      })
+    | null
+  >(null);
   const swipe = useRef<{
     id: number;
     x: number;
@@ -166,16 +166,15 @@ export default function Stage({
     cancelled: boolean;
   } | null>(null);
   const lasers = useRef<{ x: number; y: number; t: number }[]>([]);
-  const preparePreview = useRef<() => void>(() => {});
+  const paintPreview = useRef<(view: PageView) => void>(() => {});
   const showInkPreview = useCallback(() => {
     const stage = viewport.current;
-    if (stage && !stage.hasAttribute('data-ink-preview')) {
-      preparePreview.current();
+    if (stage && !stage.hasAttribute('data-ink-preview'))
       stage.setAttribute('data-ink-preview', '');
-    }
   }, []);
+  const paintInkPreview = useCallback((view: PageView) => paintPreview.current(view), []);
   const stack = usePageStack(continuousPages, page, size, fitWidth, onFocusPage);
-  const { fit, contentBounds, paintStack, settleStack, takePagePan } = stack;
+  const { fit, contentBounds, paintStack, pagePosition, settleStack, takePagePan } = stack;
   const {
     view,
     pan,
@@ -201,7 +200,9 @@ export default function Stage({
     zoom,
     setZoom,
     showInkPreview,
+    paintInkPreview,
     paintStack,
+    pagePosition,
     settleStack,
     takePagePan,
   });
@@ -224,7 +225,7 @@ export default function Stage({
     inkCanvas,
     draftCanvas,
     inkPreview,
-    prepareInkPreview,
+    paintInkPreview: paintInk,
     previewStroke,
     clearDraft,
     previewErasure,
@@ -242,9 +243,9 @@ export default function Stage({
     lasso,
     neighbors: stack.nearby,
     center: stack.active?.center ?? 0,
-    shouldPausePreview: inkPriority.isBusy,
+    shouldPausePreview: pdfBusy,
   });
-  preparePreview.current = prepareInkPreview;
+  paintPreview.current = paintInk;
   const clearInkGesture = useCallback(() => {
     inkPriority.end();
     clearDraft();
@@ -583,8 +584,35 @@ export default function Stage({
     onNavigate(dx < 0 ? 1 : -1);
     return true;
   };
-  const down = (e: ReactPointerEvent) => {
+  const startPinch = (a: Position, b: Position): Pinch => {
     const { zoom, pan } = view.current;
+    const r = viewport.current!.getBoundingClientRect();
+    const mid = { x: r.left + size.w / 2, y: r.top + size.h / 2 };
+    return {
+      distance: Math.hypot(a.x - b.x, a.y - b.y),
+      zoom,
+      mid,
+      anchor: {
+        x: ((a.x + b.x) / 2 - mid.x - pan.x) / zoom,
+        y: ((a.y + b.y) / 2 - mid.y - pan.y) / zoom,
+      },
+    };
+  };
+  const movePinch = (g: Pinch, a: Position, b: Position) => {
+    const zoom = clampPageZoom((g.zoom * Math.hypot(a.x - b.x, a.y - b.y)) / (g.distance || 1));
+    moveView(
+      zoom,
+      limit(
+        {
+          x: (a.x + b.x) / 2 - g.mid.x - g.anchor.x * zoom,
+          y: (a.y + b.y) / 2 - g.mid.y - g.anchor.y * zoom,
+        },
+        zoom,
+      ),
+    );
+  };
+  const down = (e: ReactPointerEvent) => {
+    const { pan } = view.current;
     if (e.button !== 0 && e.pointerType === 'mouse') return;
     e.currentTarget.setPointerCapture(e.pointerId);
     if (e.pointerType === 'touch') {
@@ -601,16 +629,7 @@ export default function Stage({
         gesture.current = null;
         clearInkGesture();
         const [a, b] = [...touches.current.values()];
-        const r = viewport.current!.getBoundingClientRect();
-        const mid = {
-          x: (a.x + b.x) / 2 - r.left - size.w / 2,
-          y: (a.y + b.y) / 2 - r.top - size.h / 2,
-        };
-        pinch.current = {
-          distance: Math.hypot(a.x - b.x, a.y - b.y),
-          zoom,
-          anchor: { x: (mid.x - pan.x) / (fit * zoom), y: (mid.y - pan.y) / (fit * zoom) },
-        };
+        pinch.current = startPinch(a, b);
         return;
       }
       if (touches.current.size > 2) {
@@ -714,20 +733,8 @@ export default function Stage({
       touches.current.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (e.pointerType === 'touch' && nativePinch.current) return;
     if (pinch.current && touches.current.size >= 2) {
-      const [a, b] = [...touches.current.values()],
-        g = pinch.current,
-        r = viewport.current!.getBoundingClientRect();
-      const z = clampPageZoom((g.zoom * Math.hypot(a.x - b.x, a.y - b.y)) / (g.distance || 1));
-      moveView(
-        z,
-        limit(
-          {
-            x: (a.x + b.x) / 2 - r.left - size.w / 2 - g.anchor.x * fit * z,
-            y: (a.y + b.y) / 2 - r.top - size.h / 2 - g.anchor.y * fit * z,
-          },
-          z,
-        ),
-      );
+      const [a, b] = [...touches.current.values()];
+      movePinch(pinch.current, a, b);
       return;
     }
     const g = gesture.current;
@@ -979,7 +986,7 @@ export default function Stage({
           stylusContact.current = stylus.identifier;
           return;
         }
-        const { zoom, pan } = view.current;
+        const { pan } = view.current;
         const contacts = Array.from(e.touches) as Array<
           (typeof e.touches)[0] & { radiusX?: number; radiusY?: number; touchType?: string }
         >;
@@ -1005,17 +1012,10 @@ export default function Stage({
           if (!nativePinch.current || nativePinch.current.ending) {
             hideEraser();
             beginView();
-            const [a, b] = contacts,
-              r = viewport.current!.getBoundingClientRect();
-            const mid = {
-              x: (a.clientX + b.clientX) / 2 - r.left - size.w / 2,
-              y: (a.clientY + b.clientY) / 2 - r.top - size.h / 2,
-            };
+            const [a, b] = contacts;
             nativePinch.current = {
+              ...startPinch({ x: a.clientX, y: a.clientY }, { x: b.clientX, y: b.clientY }),
               ids: [a.identifier, b.identifier],
-              distance: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY),
-              zoom,
-              anchor: { x: (mid.x - pan.x) / (fit * zoom), y: (mid.y - pan.y) / (fit * zoom) },
               starts: new Map(contacts.map((t) => [t.identifier, { x: t.clientX, y: t.clientY }])),
               ending: false,
             };
@@ -1118,21 +1118,7 @@ export default function Stage({
             })
           )
             tap.current.cancelled = true;
-          const r = viewport.current!.getBoundingClientRect(),
-            z = clampPageZoom(
-              (n.zoom * Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY)) /
-                (n.distance || 1),
-            );
-          moveView(
-            z,
-            limit(
-              {
-                x: (a.clientX + b.clientX) / 2 - r.left - size.w / 2 - n.anchor.x * fit * z,
-                y: (a.clientY + b.clientY) / 2 - r.top - size.h / 2 - n.anchor.y * fit * z,
-              },
-              z,
-            ),
-          );
+          movePinch(n, { x: a.clientX, y: a.clientY }, { x: b.clientX, y: b.clientY });
           return;
         }
         const g = swipe.current;

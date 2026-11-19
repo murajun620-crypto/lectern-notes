@@ -27,15 +27,19 @@ export function usePdfDetail({
   isBusy: () => boolean;
   showDetail: (canvas: HTMLCanvasElement) => void;
 }) {
-  const cache = useRef<{
-    id: string;
-    canvas: HTMLCanvasElement;
-    scale: number;
-    left: number;
-    top: number;
-    right: number;
-    bottom: number;
-  } | null>(null);
+  const cache = useRef(
+    new Map<
+      string,
+      {
+        canvas: HTMLCanvasElement;
+        scale: number;
+        left: number;
+        top: number;
+        right: number;
+        bottom: number;
+      }
+    >(),
+  );
   const { id, assetId, sourcePage, width, height } = page;
   useEffect(() => {
     if (!assetId) return;
@@ -57,11 +61,10 @@ export function usePdfDetail({
     const scale = displayScale * density;
     if (baseScale >= scale - 1e-6) return;
 
-    const last = cache.current;
+    const last = cache.current.get(id);
     const tolerance = 1 / density;
     if (
-      last?.id === id &&
-      last.canvas.isConnected &&
+      last?.canvas.isConnected &&
       last.scale >= scale - 1e-6 &&
       originX + last.left * displayScale <= visible.left + tolerance &&
       originY + last.top * displayScale <= visible.top + tolerance &&
@@ -119,16 +122,17 @@ export function usePdfDetail({
             current.pan.y !== pan.y
           )
             return;
-          cache.current = {
-            id,
+          showDetail(canvas);
+          for (const [key, entry] of cache.current)
+            if (!entry.canvas.isConnected) cache.current.delete(key);
+          cache.current.set(id, {
             canvas,
             scale,
             left: (box.left - originX) / displayScale,
             top: (box.top - originY) / displayScale,
             right: (box.right - originX) / displayScale,
             bottom: (box.bottom - originY) / displayScale,
-          };
-          showDetail(canvas);
+          });
           published = true;
         })
         .catch(() => {

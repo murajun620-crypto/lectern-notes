@@ -23,7 +23,8 @@ export function usePageStack(
   );
   const currentStack = useRef(stack);
   currentStack.current = stack;
-  const active = stack.find((item) => item.page.id === page.id);
+  const byId = useMemo(() => new Map(stack.map((item) => [item.page.id, item])), [stack]);
+  const active = byId.get(page.id);
   const activeId = active?.page.id;
   const activeCenter = active?.center;
   const fit = active?.fit ?? pageFit(page, size, fitWidth);
@@ -38,6 +39,14 @@ export function usePageStack(
   const carried = useRef<{ id: string; pan: PageView['pan'] } | null>(null);
   const [range, setRange] = useState<[number, number]>([0, 1]);
   const lastRange = useRef(range);
+  const pagePosition = useCallback(
+    (id: string) => {
+      const item = byId.get(id);
+      if (item && activeCenter !== undefined)
+        return { fit: item.fit, offset: item.center - activeCenter };
+    },
+    [byId, activeCenter],
+  );
   const focus = useCallback(
     (target: StackPage, view: PageView) => {
       if (activeCenter === undefined || target.page.id === activeId) return;
@@ -59,11 +68,14 @@ export function usePageStack(
 
       const stack = currentStack.current;
       const center = activeCenter - view.pan.y / view.zoom;
-      // Include the next page on either side, so dragging can expose it immediately.
       const reach = size.h / (2 * view.zoom);
-      const first = Math.max(0, stackIndexAt(stack, center - reach) - 1);
-      const last = Math.min(stack.length - 1, stackIndexAt(stack, center + reach) + 1);
-      if (first !== lastRange.current[0] || last !== lastRange.current[1]) {
+      const visibleFirst = stackIndexAt(stack, center - reach);
+      const visibleLast = stackIndexAt(stack, center + reach);
+      // Retain the existing neighbors while they still cover the viewport.
+      const [start, end] = lastRange.current;
+      if (visibleFirst < start || visibleLast > end || end >= stack.length) {
+        const first = Math.max(0, visibleFirst - 1);
+        const last = Math.min(stack.length - 1, visibleLast + 1);
         lastRange.current = [first, last];
         setRange(lastRange.current);
       }
@@ -72,10 +84,19 @@ export function usePageStack(
   );
   const settleStack = useCallback(
     (view: PageView) => {
-      if (activeCenter !== undefined)
-        focus(stackPageAt(currentStack.current, activeCenter - view.pan.y / view.zoom), view);
+      if (activeCenter === undefined) return;
+      const list = currentStack.current;
+      const center = activeCenter - view.pan.y / view.zoom;
+      const reach = size.h / (2 * view.zoom);
+      const first = Math.max(0, stackIndexAt(list, center - reach) - 1);
+      const last = Math.min(list.length - 1, stackIndexAt(list, center + reach) + 1);
+      if (first !== lastRange.current[0] || last !== lastRange.current[1]) {
+        lastRange.current = [first, last];
+        setRange(lastRange.current);
+      }
+      focus(stackPageAt(list, center), view);
     },
-    [activeCenter, focus],
+    [activeCenter, focus, size.h],
   );
   const takePagePan = useCallback((id: string) => {
     const next = carried.current;
@@ -103,6 +124,7 @@ export function usePageStack(
     videoLayer,
     focus,
     paintStack,
+    pagePosition,
     settleStack,
     takePagePan,
     pageAtPointer,

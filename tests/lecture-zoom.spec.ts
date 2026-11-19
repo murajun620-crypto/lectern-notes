@@ -168,6 +168,17 @@ test('pinch reuses the backing bitmap and sharpens the visible region after rele
   const inkWidth = await page.getByTestId('ink-canvas').evaluate((c: HTMLCanvasElement) => c.width);
   await page.evaluate(() => {
     (window as any).__rasterChanges = [];
+    (window as any).__postPinchInk = [];
+    let released = 0;
+    const stage = document.querySelector('[data-testid=stage]')!;
+    const ink = stage.querySelector('.ink-canvas');
+    stage.addEventListener('touchend', () => (released = performance.now()), { capture: true });
+    const clear = CanvasRenderingContext2D.prototype.clearRect;
+    CanvasRenderingContext2D.prototype.clearRect = function (...args) {
+      if (released && this.canvas === ink)
+        (window as any).__postPinchInk.push(performance.now() - released);
+      return clear.apply(this, args);
+    };
     const c = document.querySelector('.pdf-canvas')!;
     new MutationObserver((records) =>
       (window as any).__rasterChanges.push(...records.map((r) => r.attributeName)),
@@ -213,6 +224,8 @@ test('pinch reuses the backing bitmap and sharpens the visible region after rele
   await expect(page.locator('.pdf-detail-layer canvas')).toBeVisible();
   expect(await page.evaluate(() => (window as any).__rasterChanges)).toEqual([]);
   await expect(page.getByTestId('ink-canvas')).toBeVisible();
+  const inkRefresh = await page.evaluate(() => (window as any).__postPinchInk[0]);
+  expect(inkRefresh).toBeGreaterThanOrEqual(70);
   await expect(page.locator('.ink-page-preview')).toBeHidden();
   await expect(page.locator('.pdf-loading')).toHaveCount(0);
   await page.getByLabel('表示倍率').selectOption('1');
@@ -229,6 +242,40 @@ test('pinch reuses the backing bitmap and sharpens the visible region after rele
   const pg = (await projects(page))[0].pages[0];
   expect(Math.abs(pg.strokes[0].points[0].x - pg.width * 0.3)).toBeLessThan(2);
   expect(Math.abs(pg.strokes[0].points[0].y - pg.height * 0.4)).toBeLessThan(2);
+});
+
+test('continuous page focus keeps the sharp PDF pixels aligned across a touch release', async ({
+  page,
+}) => {
+  await demo(page);
+  await page.getByLabel('表示倍率').selectOption('2');
+  const view = page.getByTestId('stage');
+  const stage = (await view.boundingBox())!;
+  const paper = (await page.getByTestId('pdf-page').boundingBox())!;
+  const cx = stage.x + stage.width / 2;
+  const cy = stage.y + stage.height / 2;
+  await page.mouse.move(cx, cy);
+  await page.mouse.wheel(0, paper.y + paper.height + 18 - cy - 45);
+  const detail = page.locator('.pdf-detail-surface');
+  await expect(detail).toHaveCount(1);
+  await expect(detail).toHaveCSS('transform', 'none');
+  await expect(page.getByLabel('ページ番号')).toHaveValue('1');
+  const previous = detail.locator('canvas');
+  await previous.evaluate((canvas) => (canvas.dataset.keep = 'true'));
+  const a = { identifier: 4, clientX: cx, clientY: cy + 65 };
+  const b = { ...a, clientY: a.clientY - 95 };
+  await touch(page, 'touchstart', [a]);
+  await touch(page, 'touchmove', [b]);
+  const kept = view.locator('canvas[data-keep]');
+  const before = await kept.boundingBox();
+  await touch(page, 'touchend', [], [b]);
+  await expect(page.getByLabel('ページ番号')).toHaveValue('2');
+  await expect(kept).toBeVisible();
+  const after = await kept.boundingBox();
+  expect(after?.y).toBeCloseTo(before!.y, 0);
+  expect(after?.width).toBeCloseTo(before!.width, 0);
+  await expect(detail).toHaveCount(2);
+  await expect(kept).toBeVisible();
 });
 
 test('video placement and inline player stay aligned after compositor zoom', async ({ page }) => {
@@ -351,7 +398,7 @@ test.describe('high-DPI PDF detail rendering', () => {
       .locator('.pdf-canvas')
       .evaluate((canvas: HTMLCanvasElement) => canvas.width);
     expect(paper.width * 2).toBeGreaterThan(previewWidth * 2);
-    await expect(page.locator('.pdf-detail-layer')).toHaveCSS('transform', 'none');
+    await expect(page.locator('.pdf-detail-surface')).toHaveCSS('transform', 'none');
     expect(await samples()).toEqual([
       [255, 0, 0, 255],
       [0, 0, 255, 255],
@@ -376,10 +423,10 @@ test.describe('high-DPI PDF detail rendering', () => {
     await page.mouse.down();
     await page.mouse.move(stage.x + stage.width * 0.8, y, { steps: 8 });
     await expect(detail).toHaveAttribute('data-test-old-detail', '');
-    await expect(page.locator('.pdf-detail-layer')).not.toHaveCSS('transform', 'none');
+    await expect(page.locator('.pdf-detail-surface')).not.toHaveCSS('transform', 'none');
     await page.mouse.up();
     await expect(detail).not.toHaveAttribute('data-test-old-detail');
-    await expect(page.locator('.pdf-detail-layer')).toHaveCSS('transform', 'none');
+    await expect(page.locator('.pdf-detail-surface')).toHaveCSS('transform', 'none');
     expect(await samples()).toEqual([
       [255, 0, 0, 255],
       [255, 0, 0, 255],

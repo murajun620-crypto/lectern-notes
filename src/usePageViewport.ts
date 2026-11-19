@@ -29,7 +29,9 @@ export function usePageViewport({
   zoom,
   setZoom,
   showInkPreview,
+  paintInkPreview,
   paintStack,
+  pagePosition,
   settleStack,
   takePagePan,
 }: {
@@ -45,20 +47,26 @@ export function usePageViewport({
   zoom: number;
   setZoom: (z: number) => void;
   showInkPreview: () => void;
+  paintInkPreview: (view: PageView) => void;
   paintStack: (view: PageView) => void;
+  pagePosition: (id: string) => { fit: number; offset: number } | undefined;
   settleStack: (view: PageView) => void;
   takePagePan: (pageId: string) => Offset | undefined;
 }) {
   const [pan, setPan] = useState<Offset>({ x: 0, y: 0 });
   const [settled, setSettled] = useState(0);
   const view = useRef<PageView>({ zoom, pan: { x: 0, y: 0 } });
-  const detailView = useRef<{
-    view: PageView;
-    pageId: string;
-    fit: number;
-    w: number;
-    h: number;
-  } | null>(null);
+  const detailViews = useRef<
+    Array<{
+      canvas: HTMLCanvasElement;
+      surface: HTMLDivElement;
+      view: PageView;
+      pageId: string;
+      fit: number;
+      w: number;
+      h: number;
+    }>
+  >([]);
   const interacting = useRef(false),
     moved = useRef(false),
     frame = useRef<number | null>(null),
@@ -98,38 +106,57 @@ export function usePageViewport({
     if (paper.current) paper.current.style.transform = transform;
     if (backdrop.current) backdrop.current.style.transform = `translate(-50%, -50%) ${transform}`;
     paintStack(current);
-    const layer = detail.current,
-      previous = detailView.current;
-    if (!layer || !previous) return;
-    if (previous.pageId !== pageId) {
-      layer.style.visibility = 'hidden';
-      return;
+    paintInkPreview(current);
+    for (const previous of detailViews.current) {
+      const position =
+        previous.pageId === pageId ? { fit, offset: 0 } : pagePosition(previous.pageId);
+      if (!position) {
+        previous.surface.hidden = true;
+        continue;
+      }
+      const ratio = (position.fit * current.zoom) / (previous.fit * previous.view.zoom);
+      const x = size.w / 2 + current.pan.x - (previous.w / 2 + previous.view.pan.x) * ratio;
+      const y =
+        size.h / 2 +
+        current.pan.y +
+        position.offset * current.zoom -
+        (previous.h / 2 + previous.view.pan.y) * ratio;
+      previous.surface.hidden = false;
+      previous.surface.style.transform =
+        ratio === 1 && x === 0 && y === 0 ? '' : `translate3d(${x}px, ${y}px, 0) scale(${ratio})`;
     }
-    const ratio = (fit * current.zoom) / (previous.fit * previous.view.zoom);
-    const x = size.w / 2 + current.pan.x - (previous.w / 2 + previous.view.pan.x) * ratio;
-    const y = size.h / 2 + current.pan.y - (previous.h / 2 + previous.view.pan.y) * ratio;
-    layer.style.visibility = 'visible';
-    layer.style.transform =
-      ratio === 1 && x === 0 && y === 0 ? '' : `translate3d(${x}px, ${y}px, 0) scale(${ratio})`;
-  }, [backdrop, detail, fit, pageId, paper, paintStack, size.w, size.h]);
+  }, [backdrop, fit, pageId, paper, paintInkPreview, paintStack, pagePosition, size.w, size.h]);
+  const releaseDetail = useCallback((item: (typeof detailViews.current)[number]) => {
+    item.surface.remove();
+    item.canvas.width = item.canvas.height = 1;
+  }, []);
   const showDetail = useCallback(
     (canvas: HTMLCanvasElement) => {
       const layer = detail.current;
       if (!layer) return;
-      const previous = layer.querySelector('canvas');
-      layer.replaceChildren(canvas);
-      if (previous) previous.width = previous.height = 1;
-      detailView.current = { view: view.current, pageId, fit, w: size.w, h: size.h };
+      const keep = detailViews.current.find((item) => item.pageId !== pageId);
+      const retained =
+        keep && keep.canvas.width * keep.canvas.height + canvas.width * canvas.height <= 12_000_000
+          ? [keep]
+          : [];
+      const surface = document.createElement('div');
+      surface.className = 'pdf-detail-surface';
+      surface.dataset.page = pageId;
+      surface.append(canvas);
+      layer.append(surface);
+      for (const item of detailViews.current) if (!retained.includes(item)) releaseDetail(item);
+      detailViews.current = [
+        { canvas, surface, view: view.current, pageId, fit, w: size.w, h: size.h },
+        ...retained,
+      ];
       paint();
     },
-    [detail, fit, pageId, paint, size.w, size.h],
+    [detail, fit, pageId, paint, releaseDetail, size.w, size.h],
   );
   const clearDetail = useCallback(() => {
-    detailView.current = null;
-    const previous = detail.current?.querySelector('canvas');
-    detail.current?.replaceChildren();
-    if (previous) previous.width = previous.height = 1;
-  }, [detail]);
+    for (const item of detailViews.current) releaseDetail(item);
+    detailViews.current = [];
+  }, [releaseDetail]);
   const begin = useCallback(() => {
     interacting.current = true;
     clearTimeout(idle.current);
@@ -176,12 +203,13 @@ export function usePageViewport({
     if (frame.current !== null) cancelAnimationFrame(frame.current);
     frame.current = null;
     if (changed) {
-      clearDetail();
+      const carriedPan = takePagePan(pageId);
+      if (!carriedPan) clearDetail();
       previousPage.current = pageId;
       interacting.current = false;
       moved.current = false;
       clearTimeout(idle.current);
-      const pan = takePagePan(pageId) ?? { x: 0, y: 0 };
+      const pan = carriedPan ?? { x: 0, y: 0 };
       view.current = { zoom, pan };
       setPan(pan);
     } else if (!interacting.current) {
@@ -196,8 +224,9 @@ export function usePageViewport({
     () => () => {
       if (frame.current !== null) cancelAnimationFrame(frame.current);
       clearTimeout(idle.current);
+      clearDetail();
     },
-    [],
+    [clearDetail],
   );
   return {
     view,

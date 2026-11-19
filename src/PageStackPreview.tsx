@@ -1,4 +1,4 @@
-import { memo, useEffect, useLayoutEffect, useRef } from 'react';
+import { memo, useEffect, useRef } from 'react';
 import type { Page } from './model';
 import { drawStrokes } from './model';
 import { renderPage } from './pdf';
@@ -47,25 +47,35 @@ export default memo(function PageStackPreview({
     return () => abort.abort();
   }, [id, width, height, sourcePage, assetId, scale, active, shouldPause]);
 
-  useLayoutEffect(() => {
+  useEffect(() => {
     const canvas = ink.current!;
-    if (active) {
+    if (!strokes.length) {
       if (canvas.width !== 1) canvas.width = 1;
       if (canvas.height !== 1) canvas.height = 1;
       return;
     }
-    canvas.width = strokes.length ? Math.max(1, Math.round(width * scale)) : 1;
-    canvas.height = strokes.length ? Math.max(1, Math.round(height * scale)) : 1;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    ctx.scale(scale, scale);
-    drawStrokes(ctx, strokes);
-  }, [id, width, height, scale, strokes, active]);
+    if (active) return;
+    let timer: ReturnType<typeof setTimeout>;
+    const paint = () => {
+      if (shouldPause()) {
+        timer = setTimeout(paint, 80);
+        return;
+      }
+      canvas.width = Math.max(1, Math.round(width * scale));
+      canvas.height = Math.max(1, Math.round(height * scale));
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      ctx.scale(scale, scale);
+      drawStrokes(ctx, strokes);
+    };
+    timer = setTimeout(paint, 80);
+    return () => clearTimeout(timer);
+  }, [id, width, height, scale, strokes, active, shouldPause]);
 
   return (
     <>
       <canvas ref={pdf} className="stack-pdf-canvas" />
-      <canvas ref={ink} className="stack-ink-canvas" hidden={active} />
+      <canvas ref={ink} className="stack-ink-canvas" />
     </>
   );
 });
