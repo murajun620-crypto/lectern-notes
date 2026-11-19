@@ -251,7 +251,9 @@ test('video placement and inline player stay aligned after compositor zoom', asy
     thumb = (await page.getByTestId('video-box').boundingBox())!;
   expect((thumb.x - r.x) / r.width).toBeCloseTo(v.x / pg.width, 2);
   expect(thumb.width / r.width).toBeCloseTo(v.width / pg.width, 2);
-  await page.getByRole('button', { name: '動画を選択', exact: true }).click();
+  await page
+    .getByRole('button', { name: 'サムネイルを選択', exact: true })
+    .click({ position: { x: 3, y: 3 } });
   const ribbon = page.locator('.video-handle');
   expect((await ribbon.boundingBox())!.height).toBeCloseTo(28, 0);
   await page.getByLabel('表示倍率').selectOption('3');

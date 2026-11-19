@@ -181,12 +181,7 @@ export default function VideoBox({
     visibleBounds.top * scale + 4,
     Math.max(visibleBounds.top * scale + 4, visibleBounds.bottom * scale - editHeight - 4),
   );
-  const playLabel = selected ? '動画をページ内で再生' : '動画を選択';
-  const activate = () => {
-    if (!selected) {
-      onSelect();
-      return;
-    }
+  const startPlayback = () => {
     onDeselect();
     setPlaying(true);
   };
@@ -319,18 +314,6 @@ export default function VideoBox({
             </div>
           )}
         </>
-      ) : collapsed ? (
-        <button
-          type="button"
-          className="video-thumbnail"
-          aria-label={playLabel}
-          title={playLabel}
-          onClick={activate}
-        >
-          <span className="play-badge" style={badgeStyle}>
-            <Play fill="currentColor" />
-          </span>
-        </button>
       ) : (
         <>
           <button
@@ -340,22 +323,24 @@ export default function VideoBox({
             aria-pressed={selected}
             onClick={onSelect}
           >
-            <img
-              src={`https://i.ytimg.com/vi/${v.videoId}/hqdefault.jpg`}
-              alt="YouTube動画のサムネイル"
-              draggable={false}
-              onError={(e) => {
-                e.currentTarget.style.visibility = 'hidden';
-              }}
-            />
+            {!collapsed && (
+              <img
+                src={`https://i.ytimg.com/vi/${v.videoId}/hqdefault.jpg`}
+                alt="YouTube動画のサムネイル"
+                draggable={false}
+                onError={(e) => {
+                  e.currentTarget.style.visibility = 'hidden';
+                }}
+              />
+            )}
           </button>
           <button
             type="button"
             className="play-badge"
             style={badgeStyle}
-            aria-label={playLabel}
-            title={playLabel}
-            onClick={activate}
+            aria-label="動画をページ内で再生"
+            title="動画をページ内で再生"
+            onClick={startPlayback}
           >
             <Play fill="currentColor" />
           </button>

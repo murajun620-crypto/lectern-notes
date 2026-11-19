@@ -279,8 +279,6 @@ test('YouTube placement controls appear on selection and stay available in fulls
     'true',
   );
   await expect(handle).toHaveCount(0);
-  await box.getByRole('button', { name: '動画を選択', exact: true }).click();
-  await expect(handle).toBeVisible();
   await page.getByRole('button', { name: '動画をページ内で再生' }).click();
   await expect(handle).toHaveCount(0);
   await expect(page.getByTitle('YouTube動画', { exact: true })).toBeVisible();
@@ -293,6 +291,11 @@ test('YouTube placement controls appear on selection and stay available in fulls
     '_blank',
   );
   await page.getByTitle('動画を閉じる').click();
+  await expect(handle).toHaveCount(0);
+  const thumbnail = box.getByRole('button', { name: 'サムネイルを選択', exact: true });
+  await thumbnail.click({ position: { x: 3, y: 3 } });
+  await expect(handle).toBeVisible();
+  await expect(box.locator('iframe')).toHaveCount(0);
   await expect(page.getByLabel('ページ番号')).toHaveValue('1');
   await page.getByRole('button', { name: '全画面表示を終了' }).click();
   await page.getByRole('button', { name: '次のページ', exact: true }).click();

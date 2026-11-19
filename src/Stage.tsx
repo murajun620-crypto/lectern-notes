@@ -401,10 +401,13 @@ export default function Stage({
     const event = e.nativeEvent;
     const samples = event.getCoalescedEvents?.();
     const spacing = 0.25 / screenScale();
+    const pencilStroke = g.kind === 'draw' && e.pointerType === 'pen';
+    const inContact = (sample: PointerEvent) => !!sample.buttons || sample.pressure > 0;
+    const usableBatch = samples?.length && (!pencilStroke || samples.some(inContact));
     // The parent event summarizes the batch and may be behind its final contact point.
-    for (const sample of samples?.length ? samples : [event]) {
-      if (g.kind === 'draw' && e.pointerType === 'pen' && !sample.buttons && !sample.pressure)
-        continue;
+    // If the batch carries no contact information, a contact-marked parent can still supply a point.
+    for (const sample of usableBatch ? samples : [event]) {
+      if (pencilStroke && !inContact(sample)) continue;
       const p = point(
         {
           clientX: sample.clientX,

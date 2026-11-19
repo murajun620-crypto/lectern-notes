@@ -292,7 +292,7 @@ test('Pencil writes in hand mode, a resting palm stays blocked, and two-finger t
 test.describe('Pencil contact samples', () => {
   test.use({ viewport: { width: 1024, height: 768 }, deviceScaleFactor: 2 });
 
-  test('coalesced samples remain in order and produce a continuous light stroke', async ({
+  test('Pencil strokes stay continuous when a detailed batch loses contact flags', async ({
     page,
   }) => {
     await demo(page);
@@ -311,6 +311,7 @@ test.describe('Pencil contact samples', () => {
           dx: number,
           dy: number,
           samples?: { clientX: number; clientY: number; pressure: number; buttons: number }[],
+          contact = true,
         ) => {
           const event = new PointerEvent(type, {
             bubbles: true,
@@ -319,8 +320,8 @@ test.describe('Pencil contact samples', () => {
             isPrimary: true,
             clientX: pos.x + dx,
             clientY: pos.y + dy,
-            pressure: 0.07,
-            buttons: 1,
+            pressure: contact ? 0.07 : 0,
+            buttons: contact ? 1 : 0,
           });
           if (samples) Object.defineProperty(event, 'getCoalescedEvents', { value: () => samples });
           el.dispatchEvent(event);
@@ -344,6 +345,19 @@ test.describe('Pencil contact samples', () => {
         }
         // Browsers without detailed samples still contribute the dispatched point.
         send('pointermove', 218, 218 * slope, []);
+        const unmarked = (offset: number) => [
+          {
+            clientX: pos.x + offset,
+            clientY: pos.y + offset * slope,
+            pressure: 0,
+            buttons: 0,
+          },
+        ];
+        for (const offset of [231, 245, 258]) {
+          send('pointermove', offset, offset * slope, unmarked(offset - 4));
+          await new Promise(requestAnimationFrame);
+        }
+        send('pointermove', 270, 68, unmarked(266), false);
       },
       { x, y },
     );
@@ -352,8 +366,8 @@ test.describe('Pencil contact samples', () => {
         (c: HTMLCanvasElement, pos) => {
           const box = c.getBoundingClientRect();
           const ratio = c.width / box.width;
-          const w = Math.round(185 * ratio);
-          const h = Math.round(58 * ratio);
+          const w = Math.round(240 * ratio);
+          const h = Math.round(67 * ratio);
           const rgba = c
             .getContext('2d')!
             .getImageData(
@@ -373,7 +387,7 @@ test.describe('Pencil contact samples', () => {
         { x, y },
       );
     await expect.poll(() => gaps('.ink-draft-canvas')).toBe(0);
-    await pointer(page, 'pointerup', 43, 'pen', x + 260, y + 77);
+    await pointer(page, 'pointerup', 43, 'pen', x + 280, y + 77);
     await expect.poll(() => gaps('.ink-canvas')).toBe(0);
     const pdf = (await page.getByTestId('pdf-page').boundingBox())!;
     await expect
@@ -390,6 +404,9 @@ test.describe('Pencil contact samples', () => {
           return [dx - 8, dx];
         }).flat(),
         218,
+        231,
+        245,
+        258,
       ]);
   });
 });
@@ -718,7 +735,9 @@ test('a small Shorts placement plays upright at the saved size and can enlarge o
   await page.getByRole('button', { name: 'このページに追加' }).click();
   await expect(page.getByTestId('video-box')).toBeVisible();
   await expect.poll(async () => (await stored(page))[0].pages[0].videos[0]?.height).toBe(160);
-  await page.getByRole('button', { name: '動画を選択', exact: true }).click();
+  await page
+    .getByRole('button', { name: 'サムネイルを選択', exact: true })
+    .click({ position: { x: 3, y: 3 } });
   await page.getByTitle('動画を横長にする', { exact: true }).click();
   await expect.poll(async () => (await stored(page))[0].pages[0].videos[0].width).toBe(160);
   await page.getByTitle('動画を縦長にする', { exact: true }).click();
@@ -758,17 +777,17 @@ test('a small Shorts placement plays upright at the saved size and can enlarge o
   expect((await page.getByTestId('video-box').boundingBox())!.width).toBeCloseTo(before.width, 0);
   await page.getByRole('button', { name: '全画面表示を終了', exact: true }).click();
   await page.getByRole('button', { name: 'ペン', exact: true }).click();
-  const select = page.getByRole('button', { name: '動画を選択', exact: true });
+  const select = page.getByRole('button', { name: 'サムネイルを選択', exact: true });
   const ribbon = page.locator('.video-handle');
   await expect(ribbon).toHaveCount(0);
-  await select.click();
-  await expect(ribbon).toBeVisible();
+  // The play area remains a one-tap shortcut after closing, including in Pen mode.
   await page.getByRole('button', { name: '動画をページ内で再生', exact: true }).click();
   await expect(iframe).toBeVisible();
+  await expect(ribbon).toHaveCount(0);
   await iframe.dispatchEvent('mock-ended');
   await expect(iframe).toHaveCount(0);
   await expect(ribbon).toHaveCount(0);
-  await select.click();
+  await select.click({ position: { x: 3, y: 3 } });
   await expect(ribbon).toBeVisible();
   await page.reload();
   await expect(page.getByTestId('video-box')).toBeVisible();
@@ -801,7 +820,7 @@ test('collapsed videos retain their placement and play silently until the player
   await page.getByLabel('YouTube URL').fill('https://www.youtube.com/shorts/M7lc1UVf-VE');
   await page.getByRole('button', { name: 'このページに追加' }).click();
   const box = page.getByTestId('video-box');
-  const select = box.getByRole('button', { name: '動画を選択', exact: true });
+  const select = box.getByRole('button', { name: 'サムネイルを選択', exact: true });
   const play = box.getByRole('button', { name: '動画をページ内で再生' });
   const thumbnail = box.locator('img');
   const fold = box.getByTitle('動画を折りたたむ', { exact: true });
@@ -810,12 +829,12 @@ test('collapsed videos retain their placement and play silently until the player
   await expect.poll(savedVideos).toHaveLength(1);
   const [original] = await savedVideos();
   await expect(fold).toHaveCount(0);
-  await select.click();
+  await select.click({ position: { x: 4, y: 4 } });
   const unfolded = (await box.boundingBox())!;
   await fold.click();
   await expect(thumbnail).toHaveCount(0);
   await expect(box.getByTitle('動画のサイズ変更')).toBeHidden();
-  const folded = (await play.boundingBox())!;
+  const folded = (await select.boundingBox())!;
   expect(folded.width).toBeCloseTo(44, 0);
   expect(folded.height).toBeCloseTo(44, 0);
   expect(folded.x).toBeCloseTo(unfolded.x, 0);
@@ -834,8 +853,6 @@ test('collapsed videos retain their placement and play silently until the player
   const anchorBeforePlay = await pageAnchor();
   const marker = (await select.boundingBox())!;
   await expect(unfold).toHaveCount(0);
-  await select.click();
-  await expect(unfold).toBeVisible();
   await play.click();
   const iframe = box.locator('iframe');
   await expect(iframe).toBeVisible();
@@ -856,7 +873,7 @@ test('collapsed videos retain their placement and play silently until the player
   await expect(select).toBeVisible();
   await expect(thumbnail).toHaveCount(0);
   expect((await select.boundingBox())!.width).toBeCloseTo(44, 0);
-  await select.click();
+  await select.click({ position: { x: 4, y: 4 } });
   await expect(unfold).toBeVisible();
 });
 
