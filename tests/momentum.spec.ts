@@ -82,11 +82,14 @@ test('a new touch stops a Pointer Events fling at its current position', async (
     send('pointermove', 11, -90, 50);
     send('pointerup', 11, -90, 56);
     const release = sheet.getBoundingClientRect().y;
-    await new Promise((r) => setTimeout(r, 65));
+    const deadline = performance.now() + 500;
+    while (release - sheet.getBoundingClientRect().y <= 40 && performance.now() < deadline)
+      await new Promise(requestAnimationFrame);
     beginning = performance.now();
     send('pointerdown', 12, 0, 0);
     const stop = sheet.getBoundingClientRect().y;
     await new Promise((r) => setTimeout(r, 130));
+    await new Promise(requestAnimationFrame);
     const hold = sheet.getBoundingClientRect().y;
     send('pointerup', 12, 0, 130);
     return { release, stop, hold };
