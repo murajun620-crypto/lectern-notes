@@ -5,6 +5,10 @@ import { clamp } from './model';
 type Offset = { x: number; y: number };
 type View = { zoom: number; pan: Offset };
 
+const maxPageZoom = 10;
+export const pageZoomSteps = [1, 1.25, 1.5, 2, 3, 4, 5, 6, 8, maxPageZoom];
+export const clampPageZoom = (zoom: number) => clamp(zoom, 1, maxPageZoom);
+
 // Bound both the texture dimensions and total pixel memory of each canvas.
 export function rasterScaleLimit(width: number, height: number) {
   return Math.min(4096 / Math.max(width, height), Math.sqrt(8_000_000 / (width * height)));
@@ -118,7 +122,7 @@ export function usePageViewport({
   }, []);
   const move = useCallback(
     (z: number, next: Offset) => {
-      view.current = { zoom: clamp(z, 1, 5), pan: next };
+      view.current = { zoom: clampPageZoom(z), pan: next };
       if (frame.current === null)
         frame.current = requestAnimationFrame(() => {
           frame.current = null;

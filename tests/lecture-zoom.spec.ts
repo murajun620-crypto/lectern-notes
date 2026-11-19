@@ -229,7 +229,7 @@ test('video placement and inline player stay aligned after compositor zoom', asy
 test.describe('high-DPI PDF detail rendering', () => {
   test.use({ viewport: { width: 1024, height: 768 }, deviceScaleFactor: 2 });
 
-  test('renders the visible PDF at device resolution beyond the full-page limit and refreshes after panning', async ({
+  test('renders the visible PDF at device resolution at 1000%, including after panning', async ({
     page,
   }) => {
     const pdf = await PDFDocument.create();
@@ -248,7 +248,8 @@ test.describe('high-DPI PDF detail rendering', () => {
     });
     await expect(page.locator('.pdf-canvas[data-page]')).toHaveCount(1);
     await page.getByLabel('表示方法').selectOption('width');
-    await page.getByLabel('表示倍率').selectOption('5');
+    const zoom = page.getByLabel('表示倍率');
+    await zoom.selectOption('10');
 
     const stage = (await page.getByTestId('stage').boundingBox())!;
     const paper = (await page.getByTestId('pdf-page').boundingBox())!;
@@ -295,5 +296,22 @@ test.describe('high-DPI PDF detail rendering', () => {
       [255, 0, 0, 255],
     ]);
     await expect(page.locator('.pdf-loading')).toHaveCount(0);
+
+    await zoom.selectOption('8');
+    const center = stage.x + stage.width / 2;
+    const a = { identifier: 1, clientX: center - 40, clientY: y };
+    const b = { identifier: 2, clientX: center + 40, clientY: y };
+    const wider = [
+      { ...a, clientX: center - 80 },
+      { ...b, clientX: center + 80 },
+    ];
+    const initialWidth = (await page.getByTestId('pdf-page').boundingBox())!.width;
+    await touch(page, 'touchstart', [a, b]);
+    await touch(page, 'touchmove', wider);
+    await expect
+      .poll(async () => (await page.getByTestId('pdf-page').boundingBox())!.width / initialWidth)
+      .toBeCloseTo(1.25, 2);
+    await touch(page, 'touchend', [], wider);
+    await expect(zoom).toHaveValue('10');
   });
 });

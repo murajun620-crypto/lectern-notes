@@ -2,7 +2,6 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 import { Trash2 } from 'lucide-react';
 import {
-  clamp,
   drawStrokes,
   drawLaser,
   pointInPolygon,
@@ -14,9 +13,10 @@ import {
 import type { Page, Point, Stroke, Tool, Video } from './model';
 import { renderPage } from './pdf';
 import VideoBox from './VideoBox';
+import type { RegisterLecturePlayback } from './VideoBox';
 import { effectiveTool, PalmGuard } from './input';
 import type { PencilTool } from './input';
-import { rasterScaleLimit, usePageViewport } from './usePageViewport';
+import { clampPageZoom, rasterScaleLimit, usePageViewport } from './usePageViewport';
 import { applyErasure } from './eraser';
 type Props = {
   page: Page;
@@ -32,6 +32,7 @@ type Props = {
   onToggleEraser: () => void;
   trail: boolean;
   lecture: boolean;
+  registerLecturePlayback: RegisterLecturePlayback;
   fitWidth: boolean;
   zoom: number;
   setZoom: (z: number) => void;
@@ -53,6 +54,7 @@ export default function Stage({
   onToggleEraser,
   trail,
   lecture,
+  registerLecturePlayback,
   fitWidth,
   zoom,
   setZoom,
@@ -553,7 +555,7 @@ export default function Stage({
       const [a, b] = [...touches.current.values()],
         g = pinch.current,
         r = viewport.current!.getBoundingClientRect();
-      const z = clamp((g.zoom * Math.hypot(a.x - b.x, a.y - b.y)) / (g.distance || 1), 1, 5);
+      const z = clampPageZoom((g.zoom * Math.hypot(a.x - b.x, a.y - b.y)) / (g.distance || 1));
       moveView(
         z,
         limit(
@@ -890,11 +892,9 @@ export default function Stage({
           )
             tap.current.cancelled = true;
           const r = viewport.current!.getBoundingClientRect(),
-            z = clamp(
+            z = clampPageZoom(
               (n.zoom * Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY)) /
                 (n.distance || 1),
-              1,
-              5,
             );
           moveView(
             z,
@@ -970,7 +970,7 @@ export default function Stage({
         beginView();
         const current = view.current;
         if (e.ctrlKey || e.metaKey) {
-          const z = clamp(current.zoom - e.deltaY * 0.005, 1, 5);
+          const z = clampPageZoom(current.zoom - e.deltaY * 0.005);
           moveView(z, limit(current.pan, z));
         } else if (current.zoom > 1)
           moveView(
@@ -1001,10 +1001,12 @@ export default function Stage({
         <canvas ref={inkCanvas} className="ink-canvas" data-testid="ink-canvas" />
         {page.videos.map((v) => (
           <VideoBox
-            key={v.id}
+            key={`${page.id}:${v.id}`}
             video={v}
             page={page}
             editing={!lecture && tool === 'hand'}
+            lecture={lecture}
+            registerLecturePlayback={registerLecturePlayback}
             pageScale={fit}
             displayZoom={zoom}
             onChange={changeVideo}

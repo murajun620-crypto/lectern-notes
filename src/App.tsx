@@ -53,6 +53,9 @@ import Stage from './Stage';
 import { highlighterWidths, loadInputPreferences, penWidths } from './input';
 import type { PencilTool } from './input';
 import { initialVideoRect } from './video-layout';
+import { PlaybackButtons } from './VideoBox';
+import type { PlaybackActions, RegisterLecturePlayback } from './VideoBox';
+import { pageZoomSteps } from './usePageViewport';
 import UpdateButton from './UpdateButton';
 function IconButton({
   label,
@@ -184,6 +187,16 @@ export default function App() {
     [fitWidth, setFitWidth] = useState(false),
     [sidebar, setSidebar] = useState(true),
     [lecture, setLecture] = useState(false);
+  const [lecturePlayback, setLecturePlayback] = useState<Record<string, PlaybackActions>>({});
+  const registerLecturePlayback = useCallback<RegisterLecturePlayback>((key, actions) => {
+    setLecturePlayback((current) => {
+      if (actions) return { ...current, [key]: actions };
+      if (!current[key]) return current;
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+  }, []);
   const fingerInk = preferences.fingerInk;
   const pencilTool = useRef<PencilTool>('pen'),
     lastWritingTool = useRef<WritingTool>('pen');
@@ -1035,6 +1048,22 @@ export default function App() {
             </details>
             {lecture && (
               <>
+                {page?.videos.map((video, i) => {
+                  const key = `${page.id}:${video.id}`;
+                  const actions = lecturePlayback[key];
+                  return (
+                    actions && (
+                      <div
+                        key={key}
+                        className="lecture-video-actions"
+                        role="group"
+                        aria-label={`動画${i + 1}の操作`}
+                      >
+                        <PlaybackButtons actions={actions} />
+                      </div>
+                    )
+                  );
+                })}
                 <span
                   className="lecture-save-indicator"
                   role="status"
@@ -1121,6 +1150,7 @@ export default function App() {
                   onToggleEraser={toggleEraser}
                   trail={trail}
                   lecture={lecture}
+                  registerLecturePlayback={registerLecturePlayback}
                   fitWidth={fitWidth}
                   zoom={zoom}
                   setZoom={setZoom}
@@ -1230,10 +1260,10 @@ export default function App() {
                 value={Number(zoom.toFixed(2))}
                 onChange={(e) => setZoom(Number(e.target.value))}
               >
-                {![1, 1.25, 1.5, 2, 3, 4, 5].includes(Number(zoom.toFixed(2))) && (
+                {!pageZoomSteps.includes(Number(zoom.toFixed(2))) && (
                   <option value={Number(zoom.toFixed(2))}>{Math.round(zoom * 100)}%</option>
                 )}
-                {[1, 1.25, 1.5, 2, 3, 4, 5].map((z) => (
+                {pageZoomSteps.map((z) => (
                   <option key={z} value={z}>
                     {z * 100}%
                   </option>

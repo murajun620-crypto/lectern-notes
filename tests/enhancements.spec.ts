@@ -460,6 +460,8 @@ test('a small Shorts placement plays upright at the saved size and can enlarge o
   await page.getByRole('button', { name: '動画をページ内で再生' }).click();
   await expect(page.getByTitle('YouTube動画', { exact: true })).toBeVisible();
   const iframe = page.getByTitle('YouTube動画', { exact: true });
+  const toolbar = page.locator('.lecture .toolbar');
+  await expect(page.getByTestId('video-box').locator('.video-playback-actions')).toHaveCount(0);
   const r = (await iframe.boundingBox())!;
   expect(r.width).toBeCloseTo(before.width, 0);
   expect(r.height).toBeCloseTo(before.height, 0);
@@ -467,14 +469,15 @@ test('a small Shorts placement plays upright at the saved size and can enlarge o
   expect(r.y).toBeCloseTo(before.y, 0);
   expect(await iframe.evaluate((el) => el.clientWidth)).toBeGreaterThanOrEqual(200);
   await iframe.evaluate((el) => el.setAttribute('data-instance', 'original'));
-  await page.getByTitle('動画を拡大', { exact: true }).click();
+  await toolbar.getByTitle('動画を拡大', { exact: true }).click();
   const big = (await iframe.boundingBox())!;
   expect(big.width).toBeGreaterThan(160);
   expect(big.width / big.height).toBeCloseTo(9 / 16);
-  await page.getByTitle('配置サイズに戻す', { exact: true }).click();
+  await toolbar.getByTitle('配置サイズに戻す', { exact: true }).click();
   expect((await iframe.boundingBox())!.width).toBeCloseTo(before.width, 0);
   await expect(iframe).toHaveAttribute('data-instance', 'original');
-  await page.getByTitle('動画を閉じる', { exact: true }).click();
+  await toolbar.getByTitle('動画を閉じる', { exact: true }).click();
+  await expect(toolbar.locator('.lecture-video-actions')).toHaveCount(0);
   expect((await page.getByTestId('video-box').boundingBox())!.width).toBeCloseTo(before.width, 0);
   await page.reload();
   await expect(page.getByTestId('video-box')).toBeVisible();

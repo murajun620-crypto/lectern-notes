@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Play,
   X,
@@ -13,6 +13,35 @@ import {
 import { clamp } from './model';
 import type { Video, Page } from './model';
 import { enlargedVideoRect, playerViewport, resizeVideo, rotateVideo } from './video-layout';
+
+export type PlaybackActions = {
+  enlarged: boolean;
+  canResize: boolean;
+  toggleSize: () => void;
+  close: () => void;
+};
+export type RegisterLecturePlayback = (key: string, actions: PlaybackActions | null) => void;
+
+export function PlaybackButtons({ actions }: { actions: PlaybackActions }) {
+  const { enlarged, canResize, toggleSize, close } = actions;
+  return (
+    <>
+      {canResize && (
+        <button
+          type="button"
+          title={enlarged ? '配置サイズに戻す' : '動画を拡大'}
+          onClick={toggleSize}
+        >
+          {enlarged ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+        </button>
+      )}
+      <button type="button" title="動画を閉じる" onClick={close}>
+        <X size={18} />
+      </button>
+    </>
+  );
+}
+
 type Player = {
   destroy(): void;
   playVideo(): void;
@@ -64,6 +93,8 @@ export default function VideoBox({
   video: v,
   page,
   editing,
+  lecture,
+  registerLecturePlayback,
   pageScale,
   displayZoom = 1,
   onChange,
@@ -72,6 +103,8 @@ export default function VideoBox({
   video: Video;
   page: Page;
   editing: boolean;
+  lecture: boolean;
+  registerLecturePlayback: RegisterLecturePlayback;
   pageScale: number;
   displayZoom?: number;
   onChange: (v: Video) => void;
@@ -95,11 +128,32 @@ export default function VideoBox({
     previewRef = useRef<Video | null>(null);
   const larger = playing ? enlargedVideoRect(v, page, pageScale * displayZoom) : v;
   const shown = playing && enlarged ? larger : preview || v;
+  const canResize = (enlarged || larger.width > v.width + 0.01) && !error;
+  const toggleSize = useCallback(() => setEnlarged((value) => !value), []);
+  const close = useCallback(() => {
+    setPlaying(false);
+    setEnlarged(false);
+  }, []);
+  const playbackKey = `${page.id}:${v.id}`;
+  useEffect(() => {
+    if (!lecture || !playing) return;
+    registerLecturePlayback(playbackKey, { enlarged, canResize, toggleSize, close });
+    return () => registerLecturePlayback(playbackKey, null);
+  }, [
+    lecture,
+    playing,
+    playbackKey,
+    enlarged,
+    canResize,
+    toggleSize,
+    close,
+    registerLecturePlayback,
+  ]);
   const compact = shown.width * pageScale * displayZoom < 180;
   const align = shown.x + shown.width / 2 > page.width / 2 ? 'right' : 'left';
   const actionsBelow = shown.y * pageScale < 30;
   const statusAbove = shown.y > page.height - shown.y - shown.height;
-  const statusBesideActions = statusAbove !== actionsBelow;
+  const statusBesideActions = !lecture && statusAbove !== actionsBelow;
   const showPreview = (next: Video | null) => {
     previewRef.current = next;
     setPreview(next);
@@ -204,27 +258,11 @@ export default function VideoBox({
             className="player-host"
             style={playerViewport(shown, pageScale, displayZoom)}
           />
-          <div className={`video-playback-actions ${align} ${actionsBelow ? 'below' : ''}`}>
-            {(enlarged || larger.width > v.width + 0.01) && !error && (
-              <button
-                type="button"
-                title={enlarged ? '配置サイズに戻す' : '動画を拡大'}
-                onClick={() => setEnlarged((value) => !value)}
-              >
-                {enlarged ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
-              </button>
-            )}
-            <button
-              type="button"
-              title="動画を閉じる"
-              onClick={() => {
-                setPlaying(false);
-                setEnlarged(false);
-              }}
-            >
-              <X size={18} />
-            </button>
-          </div>
+          {!lecture && (
+            <div className={`video-playback-actions ${align} ${actionsBelow ? 'below' : ''}`}>
+              <PlaybackButtons actions={{ enlarged, canResize, toggleSize, close }} />
+            </div>
+          )}
           {(error || blocked || !ready) && (
             <div
               className={`video-status ${align} ${statusAbove ? 'above' : ''} ${statusBesideActions ? 'with-actions' : ''}`}
