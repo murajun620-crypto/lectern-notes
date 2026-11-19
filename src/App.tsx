@@ -330,20 +330,33 @@ export default function App() {
   const history = useRef(new Map<string, { undo: Page[]; redo: Page[] }>());
   const queue = useRef(Promise.resolve()),
     saveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const persist = useCallback((p: Project) => {
-    queue.current = queue.current.catch(() => {}).then(() => saveProject(p));
-    return queue.current
-      .then(() => {
-        if (current.current === p) setSaved(true);
-      })
-      .catch((e) => {
-        setSaved(false);
-        setError(
-          `保存できません。空き容量を確認し、バックアップを保存してください。${(e as Error).message}`,
-        );
-        throw e;
+  const persist = useCallback(
+    (p: Project, automatic = false) => {
+      const write = queue.current.then(async () => {
+        // An earlier write can keep an autosave queued until the Pencil is down again.
+        if (automatic && (current.current !== p || inkPriority.isBusy())) return false;
+        await saveProject(p);
+        return true;
       });
-  }, []);
+      queue.current = write.then(
+        () => undefined,
+        () => undefined,
+      );
+      return write
+        .then((written) => {
+          if (written && current.current === p) setSaved(true);
+          return written;
+        })
+        .catch((e) => {
+          setSaved(false);
+          setError(
+            `保存できません。空き容量を確認し、バックアップを保存してください。${(e as Error).message}`,
+          );
+          throw e;
+        });
+    },
+    [inkPriority],
+  );
   useEffect(() => {
     void listProjects()
       .then((items) => {
@@ -361,12 +374,25 @@ export default function App() {
   useEffect(() => {
     if (!project) return;
     setSaved(false);
+    let stopped = false;
     const autosave = () => {
-      if (inkPriority.isBusy()) saveTimer.current = setTimeout(autosave, 100);
-      else void persist(project).catch(() => {});
+      if (stopped || current.current !== project) return;
+      const retry = () => {
+        if (!stopped && current.current === project) saveTimer.current = setTimeout(autosave, 100);
+      };
+      if (inkPriority.isBusy()) retry();
+      else
+        void persist(project, true)
+          .then((written) => {
+            if (!written) retry();
+          })
+          .catch(() => {});
     };
     saveTimer.current = setTimeout(autosave, 300);
-    return () => clearTimeout(saveTimer.current);
+    return () => {
+      stopped = true;
+      clearTimeout(saveTimer.current);
+    };
   }, [project, persist, inkPriority]);
   useEffect(() => {
     const flush = () => {

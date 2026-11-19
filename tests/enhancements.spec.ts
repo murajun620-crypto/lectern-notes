@@ -293,6 +293,146 @@ test('Pencil writes in hand mode, a resting palm stays blocked, and two-finger t
 test.describe('Pencil contact samples', () => {
   test.use({ viewport: { width: 1024, height: 768 }, deviceScaleFactor: 2 });
 
+  test('retains successive brief Pencil contacts and confirmed movement at lift-off', async ({
+    page,
+  }) => {
+    await demo(page);
+    const stage = page.getByTestId('stage');
+    const origin = await stage.evaluate((el) => {
+      HTMLElement.prototype.setPointerCapture = () => {};
+      const paper = el.querySelector('[data-testid=pdf-page]')!.getBoundingClientRect();
+      const x = Math.round(paper.left + paper.width * 0.25);
+      const y = Math.round(paper.top + paper.height * 0.35);
+      for (let i = 0; i < 6; i++) {
+        const id = 43 + i;
+        const base = x + i * 24;
+        const now = performance.now();
+        const pointer = (type: string, dx: number, dt: number, buttons = 1, dy = 0) => {
+          const event = new PointerEvent(type, {
+            bubbles: true,
+            pointerId: id,
+            pointerType: 'pen',
+            isPrimary: true,
+            button: 0,
+            buttons,
+            pressure: buttons ? 0.015 : 0,
+            clientX: base + dx,
+            clientY: y + dy,
+          });
+          Object.defineProperty(event, 'timeStamp', { value: now + dt });
+          return event;
+        };
+        const touch = (type: string, dx: number, dy = 0) => {
+          const event = new Event(type, { bubbles: true });
+          const contact = {
+            identifier: id,
+            touchType: 'stylus',
+            clientX: base + dx,
+            clientY: y + dy,
+            force: 0,
+          };
+          Object.defineProperty(event, 'changedTouches', { value: [contact] });
+          el.dispatchEvent(event);
+        };
+        const release = () => {
+          const up = pointer('pointerup', 18, 8, 0, 13);
+          Object.defineProperty(up, 'getCoalescedEvents', {
+            value: () => [
+              pointer('pointermove', 31, -1), // stale, from before this contact
+              pointer('pointermove', 2, 2),
+              pointer('pointermove', 7, 5),
+              pointer('pointermove', 17, 7, 0, 11), // hover
+              pointer('pointerup', 20, 8, 1, 15), // release, even with flags
+            ],
+          });
+          el.dispatchEvent(up);
+        };
+        if (i === 0 || i === 1) {
+          // A complete native-only stroke and a native-only tap.
+          touch('touchstart', 0);
+          if (i === 0) touch('touchmove', 6);
+          touch('touchend', 20, 13);
+        } else if (i === 2 || i === 3) {
+          if (i === 2) touch('touchstart', 0);
+          el.dispatchEvent(pointer('pointerdown', 0, 0));
+          if (i === 3) touch('touchstart', 0);
+          touch('touchmove', 2);
+          if (i === 3) touch('touchend', 20, 13);
+          release();
+          if (i === 2) touch('touchend', 20, 13);
+          el.dispatchEvent(pointer('lostpointercapture', 20, 9, 0));
+        } else {
+          el.dispatchEvent(pointer('pointerdown', 0, 0));
+          // If the release was lost entirely, the next pen contact still preserves the mark.
+          if (i === 5) release();
+        }
+      }
+      return { x, y, paper: paper.toJSON() };
+    });
+    await expect
+      .poll(async () => {
+        const pg = (await stored(page))[0]?.pages[0];
+        return pg?.strokes.map((s: { points: { x: number; y: number }[] }, i: number) =>
+          s.points.map((p) => [
+            Math.round(origin.paper.x + (p.x * origin.paper.width) / pg.width - origin.x - i * 24),
+            Math.round(origin.paper.y + (p.y * origin.paper.height) / pg.height - origin.y),
+          ]),
+        );
+      })
+      .toEqual([
+        [
+          [0, 0],
+          [6, 0],
+        ],
+        [[0, 0]],
+        [
+          [0, 0],
+          [2, 0],
+          [7, 0],
+        ],
+        [
+          [0, 0],
+          [2, 0],
+          [7, 0],
+        ],
+        [[0, 0]],
+        [
+          [0, 0],
+          [2, 0],
+          [7, 0],
+        ],
+      ]);
+  });
+
+  test('batches quick strokes into one IndexedDB write after Pencil rests', async ({ page }) => {
+    await demo(page);
+    await expect(page.getByText('保存済み', { exact: true })).toBeVisible();
+    const stage = page.getByTestId('stage');
+    const position = await stage.evaluate((el) => {
+      HTMLElement.prototype.setPointerCapture = () => {};
+      const put = IDBObjectStore.prototype.put;
+      const writes: number[] = [];
+      Object.assign(window, { pencilSaveWrites: writes });
+      IDBObjectStore.prototype.put = function (value, key) {
+        if (this.name === 'projects') writes.push(value.pages[0].strokes.length);
+        return put.call(this, value, key);
+      };
+      const r = el.querySelector('[data-testid=pdf-page]')!.getBoundingClientRect();
+      return { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+    });
+    for (let i = 0; i < 3; i++) {
+      await pointer(page, 'pointerdown', 43, 'pen', position.x, position.y + i * 10);
+      await pointer(page, 'pointerup', 43, 'pen', position.x, position.y + i * 10);
+    }
+    await pointer(page, 'pointerdown', 43, 'pen', position.x, position.y + 30);
+    await page.waitForTimeout(500);
+    const writes = () => page.evaluate(() => Reflect.get(window, 'pencilSaveWrites'));
+    expect(await writes()).toEqual([]);
+    await pointer(page, 'pointerup', 43, 'pen', position.x, position.y + 30);
+    await expect(page.getByText('保存済み', { exact: true })).toBeVisible();
+    expect(await writes()).toEqual([4]);
+  });
+
   test('fast short marks with every pen survive batching, render, and save without lift-off lines', async ({
     page,
   }) => {

@@ -105,7 +105,7 @@ export function effectiveTool(
 }
 /** Quarantine rejected contacts until they lift; a resting palm must never become a pan later. */
 export class PalmGuard {
-  private pens = new Set<number>();
+  private pens = new Set<number | symbol>();
   private touches = new Set<number>();
   private blocked = new Set<number>();
   private lastPen = -Infinity;
@@ -115,13 +115,13 @@ export class PalmGuard {
     // conservative size heuristic shortly after real Pencil activity.
     return enabled && now - this.lastPen < 1500 && Math.max(width, height) >= 80;
   }
-  penDown(id: number, now: number) {
+  penDown(id: number | symbol, now: number) {
     this.pens.add(id);
     this.lastPen = now;
     for (const touch of this.touches) this.blocked.add(touch);
     this.touches.clear();
   }
-  penUp(id: number, now: number) {
+  penUp(id: number | symbol, now: number) {
     if (this.pens.delete(id)) this.lastPen = now;
   }
   touchDown(
