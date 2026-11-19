@@ -495,7 +495,7 @@ test('Safari touch fallback flips pages while zoomed and never double-turns a Po
   await expect(page.getByLabel('ページ番号')).toHaveValue('3');
 });
 
-test('iPad-sized layout preserves separate ink palettes through tool switching, lecture and reload', async ({
+test('iPad-sized layout keeps editing controls and ink palettes in the fullscreen fallback', async ({
   page,
   browserName,
 }) => {
@@ -510,7 +510,7 @@ test('iPad-sized layout preserves separate ink palettes through tool switching, 
   await page.setViewportSize({ width: 1024, height: 768 });
   await demo(page);
   await page.addStyleTag({ content: '.app{padding:24px 14px 20px!important;}' });
-  for (const name of ['更新確認', '書き出す', '講義を始める']) {
+  for (const name of ['更新確認', '書き出す', '全画面表示']) {
     const button =
       name === '書き出す'
         ? page.locator('.export-menu>summary')
@@ -535,8 +535,15 @@ test('iPad-sized layout preserves separate ink palettes through tool switching, 
     }, color);
   await changePreset('ペンのプリセット2の色を変更', '#00aa55');
   await expect(page.getByLabel('ペンの色', { exact: true })).toHaveValue('#00aa55');
-  await page.getByRole('button', { name: '画面いっぱいの講義表示', exact: true }).click();
-  await expect(page.locator('.app')).toHaveClass(/lecture/);
+  await page.getByRole('button', { name: '全画面表示', exact: true }).click();
+  await expect(page.locator('.app')).toHaveClass(/is-fullscreen/);
+  await expect(page.getByRole('button', { name: '選択', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'YouTube挿入' })).toBeVisible();
+  const documents = page.getByRole('button', { name: '資料メニュー', exact: true });
+  await documents.click();
+  await expect(page.getByRole('button', { name: '更新確認', exact: true })).toBeVisible();
+  await expect(page.locator('.export-menu>summary')).toBeVisible();
+  await documents.click();
   await expect(page.getByRole('alert')).toHaveCount(0);
   const penWidth = page.getByLabel('ペンの太さ', { exact: true });
   const highlighterWidth = page.getByLabel('蛍光ペンの太さ', { exact: true });
@@ -606,21 +613,27 @@ test('a small Shorts placement plays upright at the saved size and can enlarge o
   await page.getByRole('button', { name: 'このページに追加' }).click();
   await expect(page.getByTestId('video-box')).toBeVisible();
   await expect.poll(async () => (await stored(page))[0].pages[0].videos[0]?.height).toBe(160);
+  await page.getByRole('button', { name: '動画を選択', exact: true }).click();
   await page.getByTitle('動画を横長にする', { exact: true }).click();
   await expect.poll(async () => (await stored(page))[0].pages[0].videos[0].width).toBe(160);
   await page.getByTitle('動画を縦長にする', { exact: true }).click();
   for (let i = 0; i < 4; i++) await page.getByTitle('サムネイルを小さく', { exact: true }).click();
   await expect.poll(async () => (await stored(page))[0].pages[0].videos[0].height).toBeCloseTo(64);
   const savedVideo = (await stored(page))[0].pages[0].videos[0];
-  await page.getByRole('button', { name: '講義を始める', exact: true }).click();
+  const paper = page.getByTestId('pdf-page');
+  const regularHeight = (await paper.boundingBox())!.height;
+  await page.getByRole('button', { name: '全画面表示', exact: true }).click();
+  await expect
+    .poll(async () => (await paper.boundingBox())!.height)
+    .toBeGreaterThan(regularHeight + 20);
   const before = (await page.getByTestId('video-box').boundingBox())!;
   expect(before.width).toBeLessThan(80);
   expect(before.width / before.height).toBeCloseTo(9 / 16);
   await page.getByRole('button', { name: '動画をページ内で再生' }).click();
   await expect(page.getByTitle('YouTube動画', { exact: true })).toBeVisible();
   const iframe = page.getByTitle('YouTube動画', { exact: true });
-  const toolbar = page.locator('.lecture .toolbar');
-  await expect(page.getByTestId('video-box').locator('.video-playback-actions')).toHaveCount(0);
+  const toolbar = page.locator('.toolbar');
+  await expect(page.getByTestId('video-box').locator('.video-handle')).toHaveCount(0);
   const r = (await iframe.boundingBox())!;
   expect(r.width).toBeCloseTo(before.width, 0);
   expect(r.height).toBeCloseTo(before.height, 0);
@@ -636,14 +649,14 @@ test('a small Shorts placement plays upright at the saved size and can enlarge o
   expect((await iframe.boundingBox())!.width).toBeCloseTo(before.width, 0);
   await expect(iframe).toHaveAttribute('data-instance', 'original');
   await toolbar.getByTitle('動画を閉じる', { exact: true }).click();
-  await expect(toolbar.locator('.lecture-video-actions')).toHaveCount(0);
+  await expect(toolbar.locator('.toolbar-video-actions')).toHaveCount(0);
   expect((await page.getByTestId('video-box').boundingBox())!.width).toBeCloseTo(before.width, 0);
   await page.reload();
   await expect(page.getByTestId('video-box')).toBeVisible();
   expect((await stored(page))[0].pages[0].videos[0]).toEqual(savedVideo);
 });
 
-test('collapsed videos retain their placement and play without a lecture connection notice', async ({
+test('collapsed videos retain their placement and play silently until the player responds', async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1024, height: 768 });
@@ -676,7 +689,9 @@ test('collapsed videos retain their placement and play without a lecture connect
   const savedVideos = async () => (await stored(page))[0]?.pages[0].videos;
   await expect.poll(savedVideos).toHaveLength(1);
   const [original] = await savedVideos();
-  const unfolded = (await play.boundingBox())!;
+  await expect(fold).toHaveCount(0);
+  await box.getByRole('button', { name: '動画を選択', exact: true }).click();
+  const unfolded = (await box.boundingBox())!;
   await fold.click();
   await expect(thumbnail).toHaveCount(0);
   await expect(box.getByTitle('動画のサイズ変更')).toBeHidden();
@@ -687,17 +702,17 @@ test('collapsed videos retain their placement and play without a lecture connect
   expect(folded.y).toBeCloseTo(unfolded.y, 0);
   await unfold.click();
   await expect(thumbnail).toHaveCount(1);
-  expect((await play.boundingBox())!.height).toBeCloseTo(unfolded.height, 0);
+  expect((await box.boundingBox())!.height).toBeCloseTo(unfolded.height, 0);
   await fold.click();
   await expect.poll(savedVideos).toEqual([{ ...original, collapsed: true }]);
 
   await page.reload();
   await expect(play).toBeVisible();
   await expect(thumbnail).toHaveCount(0);
-  await page.getByRole('button', { name: '講義を始める', exact: true }).click();
+  await page.getByRole('button', { name: '全画面表示', exact: true }).click();
   const pageAnchor = () => box.evaluate((el) => [el.style.left, el.style.top]);
   const anchorBeforePlay = await pageAnchor();
-  const lectureMarker = (await play.boundingBox())!;
+  const marker = (await play.boundingBox())!;
   await expect(unfold).toHaveCount(0);
   await play.click();
   const iframe = box.locator('iframe');
@@ -705,7 +720,7 @@ test('collapsed videos retain their placement and play without a lecture connect
   await expect(box.getByText('YouTubeに接続中…', { exact: true })).toHaveCount(0);
   const player = (await box.boundingBox())!;
   expect(player.width / player.height).toBeCloseTo(9 / 16);
-  expect(player.height).toBeGreaterThan(lectureMarker.height);
+  expect(player.height).toBeGreaterThan(marker.height);
   expect(await pageAnchor()).toEqual(anchorBeforePlay);
   await iframe.dispatchEvent('mock-error');
   await expect(box.getByRole('alert')).toContainText(
@@ -715,7 +730,7 @@ test('collapsed videos retain their placement and play without a lecture connect
     'href',
     'https://www.youtube.com/watch?v=M7lc1UVf-VE',
   );
-  await page.locator('.lecture .toolbar').getByTitle('動画を閉じる', { exact: true }).click();
+  await page.locator('.toolbar').getByTitle('動画を閉じる', { exact: true }).click();
   await expect(play).toBeVisible();
   await expect(thumbnail).toHaveCount(0);
   expect((await play.boundingBox())!.width).toBeCloseTo(44, 0);

@@ -85,23 +85,24 @@ test('defaults to continuous pages, scrolls between sheets and lets ink follow a
   await expect(page.locator('.stack-board')).toHaveCount(0);
 });
 
-test('lecture has highlighter, no document header, and an independent persistent laser width', async ({
+test('fullscreen enlarges the viewport and keeps the active tool and laser settings', async ({
   page,
   browserName,
 }) => {
   await page.setViewportSize({ width: 1024, height: 768 });
   await demo(page);
   const before = (await page.getByTestId('stage').boundingBox())!;
-  await page.getByRole('button', { name: '講義を始める', exact: true }).click();
+  const highlighter = page.getByRole('button', { name: '蛍光ペン', exact: true });
+  await highlighter.click();
+  await page.getByRole('button', { name: '全画面表示', exact: true }).click();
   await expect(page.locator('.editor-header')).toHaveCount(0);
   await expect(page.getByRole('button', { name: '更新確認', exact: true })).toHaveCount(0);
   await expect(page.locator('.export-menu')).toHaveCount(0);
-  await expect(page.getByRole('button', { name: '蛍光ペン', exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: '編集に戻る', exact: true })).toBeVisible();
+  await expect(highlighter).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('button', { name: '全画面表示を終了', exact: true })).toBeVisible();
   await expect
     .poll(async () => (await page.getByTestId('stage').boundingBox())!.height)
     .toBeGreaterThan(before.height + 40);
-  await page.getByRole('button', { name: '蛍光ペン', exact: true }).click();
   let r = (await page.getByTestId('pdf-page').boundingBox())!;
   await page.mouse.move(r.x + r.width * 0.2, r.y + r.height * 0.4);
   await page.mouse.down();
@@ -146,8 +147,8 @@ test('lecture has highlighter, no document header, and an independent persistent
   await trace();
   await expect.poll(thickness).toBeGreaterThan(thin + 4);
   expect((await projects(page))[0].pages[0].strokes).toHaveLength(1);
-  await page.screenshot({ path: `artifacts/lecture-tools-${browserName}.png` });
-  await page.getByRole('button', { name: '編集に戻る', exact: true }).click();
+  await page.screenshot({ path: `artifacts/fullscreen-tools-${browserName}.png` });
+  await page.getByRole('button', { name: '全画面表示を終了', exact: true }).click();
   await expect(page.getByRole('button', { name: '更新確認', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'ペン', exact: true }).click();
   await expect(page.getByLabel('ペンの太さ', { exact: true })).toHaveValue('2.5');
@@ -250,6 +251,12 @@ test('video placement and inline player stay aligned after compositor zoom', asy
     thumb = (await page.getByTestId('video-box').boundingBox())!;
   expect((thumb.x - r.x) / r.width).toBeCloseTo(v.x / pg.width, 2);
   expect(thumb.width / r.width).toBeCloseTo(v.width / pg.width, 2);
+  await page.getByRole('button', { name: '動画を選択', exact: true }).click();
+  const ribbon = page.locator('.video-handle');
+  expect((await ribbon.boundingBox())!.height).toBeCloseTo(28, 0);
+  await page.getByLabel('表示倍率').selectOption('3');
+  expect((await ribbon.boundingBox())!.height).toBeCloseTo(28, 0);
+  await page.getByLabel('表示倍率').selectOption('2');
   await page.getByRole('button', { name: '動画をページ内で再生' }).click();
   await expect(page.getByTitle('YouTube動画', { exact: true })).toBeVisible();
   let player = (await page.getByTitle('YouTube動画', { exact: true }).boundingBox())!;
@@ -267,6 +274,9 @@ test('video placement and inline player stay aligned after compositor zoom', asy
   expect(player.width).toBeCloseTo(thumb.width * 0.75, 0);
   expect(player.height).toBeCloseTo(thumb.height * 0.75, 0);
   expect((await iframeViewport()).height).toBeGreaterThanOrEqual(200);
+  await page.getByRole('button', { name: '全画面表示', exact: true }).click();
+  await expect(page.getByTitle('YouTube動画', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '全画面表示を終了', exact: true }).click();
   expect(await page.evaluate(() => (window as any).__playerCount)).toBe(1);
   await page.getByTitle('動画を閉じる', { exact: true }).click();
   expect((await projects(page))[0].pages[0].videos[0]).toEqual(v);

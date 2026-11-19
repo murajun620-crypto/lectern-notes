@@ -20,11 +20,11 @@ import {
   LayoutGrid,
   Loader2,
   Maximize,
+  Minimize,
   MoreHorizontal,
   MousePointer2,
   PenLine,
   Plus,
-  Presentation,
   Redo2,
   Search,
   Settings2,
@@ -54,9 +54,10 @@ import { createInkPriority, highlighterWidths, loadInputPreferences, penWidths }
 import type { PencilTool } from './input';
 import { initialVideoRect } from './video-layout';
 import { PlaybackButtons } from './VideoBox';
-import type { PlaybackActions, RegisterLecturePlayback } from './VideoBox';
+import type { PlaybackActions, RegisterPlayback } from './VideoBox';
 import { pageZoomSteps } from './usePageViewport';
 import UpdateButton from './UpdateButton';
+import { useFullscreen } from './useFullscreen';
 function IconButton({
   label,
   children,
@@ -227,10 +228,13 @@ export default function App() {
     [zoom, setZoom] = useState(1),
     [fitWidth, setFitWidth] = useState(false),
     [sidebar, setSidebar] = useState(true),
-    [lecture, setLecture] = useState(false);
-  const [lecturePlayback, setLecturePlayback] = useState<Record<string, PlaybackActions>>({});
-  const registerLecturePlayback = useCallback<RegisterLecturePlayback>((key, actions) => {
-    setLecturePlayback((current) => {
+    [fullscreenSidebar, setFullscreenSidebar] = useState(false),
+    [documentTools, setDocumentTools] = useState(false);
+  const { fullscreen, toggleFullscreen, exitFullscreen } = useFullscreen();
+  const showSidebar = fullscreen ? fullscreenSidebar : sidebar;
+  const [videoPlayback, setVideoPlayback] = useState<Record<string, PlaybackActions>>({});
+  const registerPlayback = useCallback<RegisterPlayback>((key, actions) => {
+    setVideoPlayback((current) => {
       if (actions) return { ...current, [key]: actions };
       if (!current[key]) return current;
       const next = { ...current };
@@ -422,7 +426,7 @@ export default function App() {
       if ((e.target as HTMLElement).closest('input,textarea,select,dialog') || busy || dialog)
         return;
       if (e.key === 'Escape') {
-        setLecture(false);
+        if (fullscreen) exitFullscreen();
         return;
       }
       if (!current.current) return;
@@ -449,7 +453,10 @@ export default function App() {
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [undoRedo, navigate, busy, dialog]);
+  }, [undoRedo, navigate, busy, dialog, fullscreen, exitFullscreen]);
+  useEffect(() => {
+    if (!fullscreen) setDocumentTools(false);
+  }, [fullscreen]);
   useEffect(() => setJump(String((project?.currentPage || 0) + 1)), [project?.currentPage]);
   const run = async (label: string, fn: () => Promise<void>) => {
     setBusy(label);
@@ -479,7 +486,7 @@ export default function App() {
     setProject(p);
     history.current.clear();
     setZoom(1);
-    setLecture(false);
+    exitFullscreen();
     setTool('pen');
     void navigator.storage?.persist?.().catch(() => {});
   };
@@ -512,7 +519,7 @@ export default function App() {
         /* Optional last-opened preference. */
       }
       setProject(null);
-      setLecture(false);
+      exitFullscreen();
       releasePdfs();
       setProjects(await listProjects());
     });
@@ -579,16 +586,12 @@ export default function App() {
     setTool('hand');
   };
   const h = page ? history.current.get(page.id) : undefined;
-  const toggleLecture = () => {
-    setLecture((l) => !l);
-    setTool('pen');
-  };
   const visibleProjects = projects.filter((p) =>
     p.name.toLowerCase().includes(query.toLowerCase()),
   );
   return (
     <div
-      className={`app ${project ? 'editor' : 'library'} ${lecture ? 'lecture' : ''}`}
+      className={`app ${project ? 'editor' : 'library'} ${fullscreen ? 'is-fullscreen' : ''}`}
       onClick={(e) => {
         const target = e.target as Element;
         for (const menu of document.querySelectorAll('details[open]'))
@@ -819,8 +822,8 @@ export default function App() {
         </>
       ) : (
         <>
-          {!lecture && (
-            <header className="editor-header">
+          {(!fullscreen || documentTools) && (
+            <header className="editor-header" id="document-tools">
               <IconButton label="ライブラリに戻る" onClick={returnLibrary}>
                 <ArrowLeft size={21} />
               </IconButton>
@@ -866,56 +869,40 @@ export default function App() {
                     </button>
                   </div>
                 </details>
-                <button
-                  className={`primary lecture-button ${lecture ? 'is-lecture' : ''}`}
-                  onClick={toggleLecture}
-                >
-                  <Presentation size={18} />
-                  {lecture ? '編集に戻る' : '講義を始める'}
-                </button>
               </div>
             </header>
           )}
           <div className="toolbar">
             <div className="tool-group">
-              {tools
-                .filter(
-                  (t) =>
-                    !lecture || ['pen', 'highlighter', 'eraser', 'laser', 'hand'].includes(t.id),
-                )
-                .map((t) => (
-                  <button
-                    key={t.id}
-                    className={`tool-button ${tool === t.id ? 'active' : ''}`}
-                    title={`${t.label} (${t.key})`}
-                    aria-label={t.label}
-                    aria-pressed={tool === t.id}
-                    onClick={() => setTool(t.id)}
-                  >
-                    {t.icon}
-                    <span>{t.label}</span>
-                  </button>
-                ))}
+              {tools.map((t) => (
+                <button
+                  key={t.id}
+                  className={`tool-button ${tool === t.id ? 'active' : ''}`}
+                  title={`${t.label} (${t.key})`}
+                  aria-label={t.label}
+                  aria-pressed={tool === t.id}
+                  onClick={() => setTool(t.id)}
+                >
+                  {t.icon}
+                  <span>{t.label}</span>
+                </button>
+              ))}
             </div>
             <div className="toolbar-divider" />
-            {!lecture && (
-              <>
-                <button
-                  className="tool-button video-insert"
-                  onClick={() => {
-                    setVideoUrl('');
-                    setVideoError('');
-                    setDialog({ kind: 'video' });
-                  }}
-                  title="YouTube動画を挿入"
-                  aria-label="YouTube挿入"
-                >
-                  <Video />
-                  <span>動画を挿入</span>
-                </button>
-                <div className="toolbar-divider" />
-              </>
-            )}
+            <button
+              className="tool-button video-insert"
+              onClick={() => {
+                setVideoUrl('');
+                setVideoError('');
+                setDialog({ kind: 'video' });
+              }}
+              title="YouTube動画を挿入"
+              aria-label="YouTube挿入"
+            >
+              <Video />
+              <span>動画を挿入</span>
+            </button>
+            <div className="toolbar-divider" />
             <div className="ink-settings">
               <label className="color-picker" title={`${palette.label}の色`}>
                 <input
@@ -982,15 +969,15 @@ export default function App() {
               </IconButton>
             </div>
             <div className="toolbar-divider" />
-            {!lecture && (
-              <IconButton
-                label="ページ一覧"
-                onClick={() => setSidebar((s) => !s)}
-                active={sidebar && !lecture}
-              >
-                <LayoutGrid size={21} />
-              </IconButton>
-            )}
+            <IconButton
+              label="ページ一覧"
+              onClick={() =>
+                (fullscreen ? setFullscreenSidebar : setSidebar)((visible) => !visible)
+              }
+              active={showSidebar}
+            >
+              <LayoutGrid size={21} />
+            </IconButton>
             <details className="settings-menu">
               <summary className="icon-button" title="入力設定" aria-label="入力設定">
                 <Settings2 size={20} />
@@ -1073,58 +1060,51 @@ export default function App() {
                   />{' '}
                   レーザーの軌跡を表示
                 </label>
-                <button
-                  onClick={() => {
-                    if (
-                      !document.fullscreenEnabled ||
-                      !document.documentElement.requestFullscreen
-                    ) {
-                      toggleLecture();
-                      return;
-                    }
-                    if (!document.fullscreenElement)
-                      void document.documentElement
-                        .requestFullscreen?.()
-                        .catch(() => setLecture(true));
-                    else void document.exitFullscreen();
-                  }}
-                >
-                  <Maximize size={16} />{' '}
-                  {document.fullscreenEnabled ? '全画面表示を切替' : '画面いっぱいの講義表示'}
-                </button>
               </div>
             </details>
-            {lecture && (
-              <>
-                {Object.entries(lecturePlayback).map(([key, actions], i) => {
-                  return (
-                    <div
-                      key={key}
-                      className="lecture-video-actions"
-                      role="group"
-                      aria-label={`動画${i + 1}の操作`}
-                    >
-                      <PlaybackButtons actions={actions} />
-                    </div>
-                  );
-                })}
-                <span
-                  className="lecture-save-indicator"
-                  role="status"
-                  aria-label={saved ? '保存済み' : '保存中'}
-                  title={saved ? '保存済み' : '保存中'}
-                >
-                  {saved ? <Check size={15} /> : <Loader2 size={15} className="spin" />}
-                </span>
-                <button className="lecture-exit" onClick={toggleLecture} aria-label="編集に戻る">
-                  <ArrowLeft size={17} />
-                  <span>編集に戻る</span>
-                </button>
-              </>
+            {Object.entries(videoPlayback).map(([key, actions], i) => (
+              <div
+                key={key}
+                className="toolbar-video-actions"
+                role="group"
+                aria-label={`動画${i + 1}の操作`}
+              >
+                <PlaybackButtons actions={actions} />
+              </div>
+            ))}
+            {fullscreen && !documentTools && (
+              <span
+                className="toolbar-save-indicator"
+                role="status"
+                aria-label={saved ? '保存済み' : '保存中'}
+                title={saved ? '保存済み' : '保存中'}
+              >
+                {saved ? <Check size={15} /> : <Loader2 size={15} className="spin" />}
+              </span>
             )}
+            {fullscreen && (
+              <button
+                type="button"
+                className="icon-button"
+                title="資料メニュー"
+                aria-label="資料メニュー"
+                aria-expanded={documentTools}
+                aria-controls="document-tools"
+                onClick={() => setDocumentTools((open) => !open)}
+              >
+                <FileText size={19} />
+              </button>
+            )}
+            <IconButton
+              label={fullscreen ? '全画面表示を終了' : '全画面表示'}
+              onClick={toggleFullscreen}
+              active={fullscreen}
+            >
+              {fullscreen ? <Minimize size={19} /> : <Maximize size={19} />}
+            </IconButton>
           </div>
           <div className="editor-body">
-            {sidebar && !lecture && (
+            {showSidebar && (
               <aside className="page-sidebar">
                 <div className="sidebar-heading">
                   ページ <span>{project.pages.length}</span>
@@ -1198,8 +1178,7 @@ export default function App() {
                   twoFingerTap={preferences.twoFingerTap}
                   onToggleEraser={toggleEraser}
                   trail={trail}
-                  lecture={lecture}
-                  registerLecturePlayback={registerLecturePlayback}
+                  registerPlayback={registerPlayback}
                   fitWidth={fitWidth}
                   zoom={zoom}
                   setZoom={setZoom}
@@ -1211,7 +1190,7 @@ export default function App() {
                   onError={setError}
                 />
               )}
-              {lecture && (
+              {fullscreen && (
                 <>
                   <button
                     className="edge-nav prev"
@@ -1235,19 +1214,11 @@ export default function App() {
           </div>
           <footer className="editor-footer">
             <span className="footer-tool">
-              {lecture ? (
-                <>
-                  <span className="live-dot" /> 講義モード
-                </>
-              ) : (
-                <>
-                  <span className="live-dot" /> {tools.find((t) => t.id === tool)?.label}ツール
-                </>
-              )}
-              {!lecture && (
+              <span className="live-dot" /> {tools.find((t) => t.id === tool)?.label}ツール
+              {!fullscreen && (
                 <span className="footer-hint">
                   {tool === 'hand'
-                    ? '動画の上部で移動・右下でサイズ変更'
+                    ? '動画のサムネイルをタップして配置を編集'
                     : preferences.pageMode === 'continuous'
                       ? 'Pencilで書く、指で上下にスクロール'
                       : 'Pencilで書く、指でめくる'}
@@ -1378,7 +1349,8 @@ export default function App() {
             />
             {videoError && <p className="field-error">{videoError}</p>}
             <p className="form-note">
-              配置後は「移動」ツールで位置とサイズを調整できます。講義モードでは配置を固定し、タップでページ内再生します。
+              配置したサムネイルを選ぶと、移動・サイズ変更・折りたたみなどのボタンが出ます。中央の ▶
+              でページ内再生します。
             </p>
             <div className="modal-actions">
               <button type="button" className="secondary" onClick={() => setDialog(null)}>
@@ -1493,7 +1465,7 @@ export default function App() {
             </p>
             <h3>講義と画面ミラーリング</h3>
             <p>
-              「講義を始める」でツールバーを縮小し、動画の移動をロックします。AirPlay／HDMIの画面ミラーリングにレーザーも反映されます。外部ディスプレイ専用ウィンドウはありません。初回のiPad実機・投影確認を講義前に行ってください。
+              「全画面表示」でPDFを広く表示しながら、同じ編集ツールを使えます。「資料メニュー」から書き出しや更新確認を開けます。動画の画像部分をタップすると配置メニュー、中央の再生ボタンを押すとページ内再生が開きます。AirPlay／HDMIで画面をミラーリングするとレーザーも反映されます。
             </p>
             <p className="form-note">
               ショートカット：P ペン / M 蛍光ペン / E 消しゴム / S 選択 / L レーザー / H 移動 / ← →

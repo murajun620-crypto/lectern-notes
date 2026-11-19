@@ -5,7 +5,7 @@ import { drawLaser, strokeHit, transformStroke, uid } from './model';
 import type { Page, Point, Stroke, Tool, Video } from './model';
 import { renderPage } from './pdf';
 import VideoBox from './VideoBox';
-import type { RegisterLecturePlayback } from './VideoBox';
+import type { RegisterPlayback } from './VideoBox';
 import { effectiveTool, PalmGuard } from './input';
 import type { InkPriority, PencilTool } from './input';
 import { clampPageZoom, usePageViewport } from './usePageViewport';
@@ -44,8 +44,7 @@ type Props = {
   twoFingerTap: boolean;
   onToggleEraser: () => void;
   trail: boolean;
-  lecture: boolean;
-  registerLecturePlayback: RegisterLecturePlayback;
+  registerPlayback: RegisterPlayback;
   fitWidth: boolean;
   zoom: number;
   inkClipboard: Stroke[];
@@ -71,8 +70,7 @@ export default function Stage({
   twoFingerTap,
   onToggleEraser,
   trail,
-  lecture,
-  registerLecturePlayback,
+  registerPlayback,
   fitWidth,
   zoom,
   inkClipboard,
@@ -96,6 +94,8 @@ export default function Stage({
     [lasso, setLasso] = useState<Point[]>([]),
     [selectionPreview, setSelectionPreview] = useState<InkTransform | null>(null),
     [pasteAnchor, setPasteAnchor] = useState<Position | null>(null);
+  const [selectedVideo, setSelectedVideo] = useState<string | null>(null);
+  useEffect(() => setSelectedVideo(null), [page.id, tool]);
   const selectionIds = useMemo(() => new Set(selection), [selection]);
   const selected = useMemo(
     () => (selectionIds.size ? page.strokes.filter((stroke) => selectionIds.has(stroke.id)) : []),
@@ -808,28 +808,33 @@ export default function Stage({
     const left = owner.width / 2 - (size.w / 2 + pan.x) / scale;
     const top = owner.height / 2 - (size.h / 2 + pan.y + offsetY * zoom) / scale;
     const visibleBounds = { left, top, right: left + size.w / scale, bottom: top + size.h / scale };
-    return owner.videos.map((v: Video) => (
-      <VideoBox
-        key={`${owner.id}:${v.id}`}
-        video={v}
-        page={owner}
-        editing={!lecture && tool === 'hand'}
-        lecture={lecture}
-        registerLecturePlayback={registerLecturePlayback}
-        pageScale={ownerFit}
-        displayZoom={zoom}
-        visibleBounds={visibleBounds}
-        onChange={(next) =>
-          onChange({
-            ...owner,
-            videos: owner.videos.map((item) => (item.id === next.id ? next : item)),
-          })
-        }
-        onDelete={() =>
-          onChange({ ...owner, videos: owner.videos.filter((item) => item.id !== v.id) })
-        }
-      />
-    ));
+    return owner.videos.map((v: Video) => {
+      const key = `${owner.id}:${v.id}`;
+      return (
+        <VideoBox
+          key={key}
+          video={v}
+          page={owner}
+          selected={selectedVideo === key}
+          selectBeforePlaying={tool === 'hand'}
+          onSelect={() => setSelectedVideo(key)}
+          onDeselect={() => setSelectedVideo(null)}
+          registerPlayback={registerPlayback}
+          pageScale={ownerFit}
+          displayZoom={zoom}
+          visibleBounds={visibleBounds}
+          onChange={(next) =>
+            onChange({
+              ...owner,
+              videos: owner.videos.map((item) => (item.id === next.id ? next : item)),
+            })
+          }
+          onDelete={() =>
+            onChange({ ...owner, videos: owner.videos.filter((item) => item.id !== v.id) })
+          }
+        />
+      );
+    });
   };
   const displayScale = fit * zoom;
   const paperOrigin = {
@@ -886,7 +891,9 @@ export default function Stage({
         ) {
           e.preventDefault();
           e.stopPropagation();
+          return;
         }
+        if (selectedVideo && !(e.target as Element).closest('.video-box')) setSelectedVideo(null);
       }}
       onPointerMoveCapture={(e) => {
         if (e.pointerType === 'touch' && !palm.current.allowsTouch(e.pointerId)) {

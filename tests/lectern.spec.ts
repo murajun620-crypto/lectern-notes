@@ -219,7 +219,7 @@ test('page reorder, delete, blank page and append actual portrait/rotated PDF', 
   expect(Math.abs(paper.width - (stage.width - 56))).toBeLessThan(2);
   await page.getByRole('button', { name: 'フィット', exact: true }).click();
 });
-test('YouTube placement, API integration, playback error, lecture lock and persistence', async ({
+test('YouTube placement controls appear on selection and stay available in fullscreen', async ({
   page,
 }) => {
   await page.route('https://www.youtube.com/iframe_api', (route) =>
@@ -235,8 +235,16 @@ test('YouTube placement, API integration, playback error, lecture lock and persi
   await expect(page.getByTestId('video-box')).toBeVisible();
   await saved(page);
   const before = (await stored(page))[0].pages[0].videos[0];
-  const handle = page.locator('.video-handle');
+  const box = page.getByTestId('video-box');
+  const handle = box.locator('.video-handle');
+  await expect(handle).toHaveCount(0);
+  await expect(box.getByTitle('動画のサイズ変更')).toHaveCount(0);
+  await box
+    .getByRole('button', { name: 'サムネイルを選択', exact: true })
+    .click({ position: { x: 4, y: 4 } });
   const r = (await handle.boundingBox())!;
+  expect(r.height).toBeCloseTo(28, 0);
+  expect(r.width).toBeCloseTo(136, 0);
   await page.mouse.move(r.x + 20, r.y + 10);
   await page.mouse.down();
   await page.mouse.move(r.x + 80, r.y + 30, { steps: 6 });
@@ -263,9 +271,18 @@ test('YouTube placement, API integration, playback error, lecture lock and persi
   expect(overhang.videos[0].x + overhang.videos[0].width).toBeGreaterThan(overhang.width);
   const placed = (await page.getByTestId('video-box').boundingBox())!;
   expect(placed.x + placed.width).toBeGreaterThan(paper.x + paper.width);
-  await page.getByRole('button', { name: '講義を始める' }).click();
-  await expect(page.locator('.video-handle')).toHaveCount(0);
+  await page.mouse.click(paper.x + paper.width * 0.2, paper.y + paper.height * 0.65);
+  await expect(handle).toHaveCount(0);
+  await page.getByRole('button', { name: '全画面表示', exact: true }).click();
+  await expect(page.getByRole('button', { name: '移動', exact: true })).toHaveAttribute(
+    'aria-pressed',
+    'true',
+  );
+  await expect(handle).toHaveCount(0);
+  await box.getByRole('button', { name: '動画を選択', exact: true }).click();
+  await expect(handle).toBeVisible();
   await page.getByRole('button', { name: '動画をページ内で再生' }).click();
+  await expect(handle).toHaveCount(0);
   await expect(page.getByTitle('YouTube動画', { exact: true })).toBeVisible();
   expect(await page.evaluate(() => (window as any).__ytOptions.playerVars.playsinline)).toBe(1);
   expect(await page.evaluate(() => (window as any).__played)).toBe(true);
@@ -277,7 +294,7 @@ test('YouTube placement, API integration, playback error, lecture lock and persi
   );
   await page.getByTitle('動画を閉じる').click();
   await expect(page.getByLabel('ページ番号')).toHaveValue('1');
-  await page.getByRole('button', { name: '編集に戻る' }).click();
+  await page.getByRole('button', { name: '全画面表示を終了' }).click();
   await page.getByRole('button', { name: '次のページ', exact: true }).click();
   await page.getByRole('button', { name: 'YouTube挿入' }).click();
   await page.getByLabel('YouTube URL').fill('https://www.youtube.com/watch?v=M7lc1UVf-VE');
@@ -285,6 +302,7 @@ test('YouTube placement, API integration, playback error, lecture lock and persi
   await saved(page);
   await page.reload();
   await expect(page.getByTestId('video-box')).toHaveCount(2);
+  await expect(page.locator('.video-handle')).toHaveCount(0);
   const restored = (await stored(page))[0];
   expect(restored.pages[0].videos).toHaveLength(1);
   expect(restored.pages[0].videos[0]).toEqual(overhang.videos[0]);

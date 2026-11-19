@@ -223,20 +223,20 @@ test('circular eraser keeps both ends, supports undo and zoom, and preserves PDF
   await page.getByRole('button', { name: '元に戻す', exact: true }).click();
   await expect.poll(() => alpha(page, 0.5, 0.4)).toBe(0);
   await saved(page);
-  await page.getByRole('button', { name: '講義を始める', exact: true }).click();
+  await page.getByRole('button', { name: '全画面表示', exact: true }).click();
   await page.getByRole('button', { name: '消しゴム', exact: true }).click();
   await page.getByLabel('消しゴムのサイズ', { exact: true }).selectOption('80');
-  const lecturePaper = (await page.getByTestId('pdf-page').boundingBox())!;
+  const fullscreenPaper = (await page.getByTestId('pdf-page').boundingBox())!;
   await page.mouse.click(
-    lecturePaper.x + lecturePaper.width * 0.3,
-    lecturePaper.y + lecturePaper.height * 0.4,
+    fullscreenPaper.x + fullscreenPaper.width * 0.3,
+    fullscreenPaper.y + fullscreenPaper.height * 0.4,
   );
   await expect.poll(() => alpha(page, 0.3, 0.4)).toBe(0);
   expect(await alpha(page, 0.7, 0.4)).toBeGreaterThan(200);
-  await expect(page.locator('.lecture-save-indicator')).toHaveAttribute('aria-label', '保存済み');
+  await expect(page.locator('.toolbar-save-indicator')).toHaveAttribute('aria-label', '保存済み');
   await page.mouse.move(
-    lecturePaper.x + lecturePaper.width * 0.3,
-    lecturePaper.y + lecturePaper.height * 0.4 + 1,
+    fullscreenPaper.x + fullscreenPaper.width * 0.3,
+    fullscreenPaper.y + fullscreenPaper.height * 0.4 + 1,
   );
   await page.screenshot({ path: `artifacts/partial-eraser-${browserName}.png` });
 });

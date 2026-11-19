@@ -653,8 +653,7 @@ h3 {
   gap: 12px;
   align-items: center;
 }
-.header-end .secondary,
-.lecture-button {
+.header-end .secondary {
   font-size: 11px;
 }
 .export-menu > summary {
@@ -1186,43 +1185,10 @@ h3 {
 .edge-nav.next {
   right: 9px;
 }
-.lecture .editor-header {
-  height: 53px;
-  background: #f8f9f4;
-}
-.lecture .small-brand,
-.lecture .export-menu,
-.lecture .document-title > span {
+.is-fullscreen .stage-note {
   display: none;
 }
-.lecture .editor-header .lecture-button {
-  min-height: 36px;
-  font-size: 10px;
-}
-.lecture .toolbar {
-  min-height: 61px;
-  padding-top: 1px;
-  padding-bottom: 1px;
-  justify-content: center;
-  background: #fafbf7;
-}
-.lecture .toolbar-spacer {
-  flex: none;
-  width: 15px;
-}
-.lecture .tool-button {
-  height: 54px;
-}
-.lecture .document-title {
-  font-size: 12px;
-}
-.lecture .stage {
-  background: #dde4da;
-}
-.lecture .stage-note {
-  display: none;
-}
-.lecture .editor-footer {
+.is-fullscreen .editor-footer {
   height: 38px;
 }
 .video-box {
@@ -1255,73 +1221,71 @@ h3 {
   top: 50%;
   transform: translate(-50%, -50%);
   background: #fffffff2;
-  color: #254e3c;
+  color: #29332f;
   border-radius: 50%;
-  height: 49px;
-  width: 49px;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding-left: 3px;
+  padding: 0 0 0 2px;
   box-shadow: 0 3px 15px #0003;
 }
-.video-label {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  display: flex;
-  justify-content: space-between;
-  font-size: 10px;
-  color: white;
-  background: linear-gradient(transparent, #0009);
-  padding: 17px 10px 9px;
-}
-.video-label > span {
-  font-size: 9px;
-  opacity: 0.85;
+.play-badge svg {
+  width: 52%;
+  height: 52%;
 }
 .video-handle {
   position: absolute;
-  left: 0;
-  right: 0;
-  top: -29px;
-  height: 29px;
-  background: #244c40;
-  color: #fff;
+  transform-origin: top left;
+  background: #fafbf9;
+  color: #303632;
   display: flex;
   align-items: center;
-  gap: 5px;
-  font-size: 9px;
-  border-radius: 5px 5px 0 0;
+  border: 1px solid #d2d8d3;
+  border-radius: 5px;
   cursor: move;
-  padding: 0 8px;
+  padding: 0 2px;
+  box-shadow: 0 2px 7px #0002;
   touch-action: none;
 }
-.video-handle button {
-  margin-left: auto;
-  display: flex;
-  height: 29px;
-  align-items: center;
-  padding: 0 3px;
+.video-handle button,
+.video-grip {
+  width: 26px;
+  height: 26px;
+  flex: 0 0 26px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border-radius: 3px;
+}
+.video-handle button:hover,
+.video-handle button:focus-visible {
+  background: #e9ece8;
+}
+.video-handle button[title='動画を削除'] {
+  color: #993938;
 }
 .video-resize {
   position: absolute;
-  right: -9px;
-  bottom: -9px;
-  width: 28px;
-  height: 28px;
+  right: 0;
+  bottom: 0;
+  transform-origin: right bottom;
+  width: 24px;
+  height: 24px;
   border-radius: 5px;
-  background: #244c40;
-  color: #fff;
+  background: #fafbf9;
+  color: #303632;
+  border: 1px solid #d2d8d3;
+  padding: 0;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: nwse-resize;
   touch-action: none;
 }
-.video-box.editable {
-  outline: 2px solid #31624f;
+.video-box.selected {
+  z-index: 11;
+  outline-style: solid;
+  outline-color: #76877e;
 }
 .video-box.playing {
   min-width: 0;
@@ -1339,35 +1303,11 @@ h3 {
   border: 0;
   border-radius: 6px;
 }
-.video-playback-actions {
-  position: absolute;
-  bottom: calc(100% + 2px);
-  display: flex;
-  gap: 2px;
-  z-index: 2;
-}
-.video-playback-actions.below {
-  top: calc(100% + 2px);
-  bottom: auto;
-}
-.video-playback-actions.left,
 .video-status.left {
   left: 0;
 }
-.video-playback-actions.right,
 .video-status.right {
   right: 0;
-}
-.video-playback-actions button {
-  width: 36px;
-  height: 32px;
-  border-radius: 6px;
-  background: #213d33;
-  color: white;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  box-shadow: 0 2px 7px #0003;
 }
 .video-status {
   position: absolute;
@@ -1381,15 +1321,9 @@ h3 {
   line-height: 1.8;
   z-index: 1;
 }
-.video-status.with-actions {
-  top: calc(100% + 38px);
-}
 .video-status.above {
   top: auto;
   bottom: calc(100% + 4px);
-}
-.video-status.above.with-actions {
-  bottom: calc(100% + 38px);
 }
 .video-error p {
   margin: 0 0 4px;
@@ -1662,8 +1596,7 @@ dialog > p {
   .header-end {
     gap: 6px;
   }
-  .header-end .secondary,
-  .lecture-button {
+  .header-end .secondary {
     padding: 8px 12px;
     font-size: 10px;
   }
@@ -1728,9 +1661,6 @@ dialog > p {
   .footer-tool {
     font-size: 9px;
   }
-  .lecture .toolbar {
-    flex-wrap: nowrap;
-  }
   .local-label {
     display: none;
   }
@@ -1787,10 +1717,6 @@ dialog > p {
   .document-title {
     max-width: 43vw;
   }
-  .lecture-button {
-    padding: 8px 10px;
-    font-size: 10px;
-  }
   .toolbar {
     min-height: 108px;
   }
@@ -1822,27 +1748,8 @@ dialog > p {
   .stage-note {
     display: none;
   }
-  .lecture .toolbar {
-    min-height: 65px;
-    flex-wrap: wrap;
-  }
-  .lecture .ink-settings {
-    display: none;
-  }
-  .lecture .toolbar .toolbar-divider {
-    display: none;
-  }
-  .lecture .tool-button {
-    min-width: 44px;
-  }
-  .lecture .document-title {
-    max-width: 47vw;
-  }
   .settings-dropdown {
     right: -5px;
-  }
-  .video-label > span {
-    display: none;
   }
   .page-item {
     padding: 4px;
@@ -1899,15 +1806,6 @@ body,
 .ink-settings,
 .history-tools {
   flex-shrink: 0;
-}
-.lecture .editor-header {
-  height: auto;
-  min-height: 53px;
-  padding-top: 4px;
-  padding-bottom: 4px;
-}
-.lecture .ink-settings {
-  display: flex;
 }
 .color-preset {
   display: block;
@@ -1974,38 +1872,6 @@ body,
   background: #fff;
   border-radius: 5px;
 }
-.video-box.compact .play-badge {
-  width: 29px;
-  height: 29px;
-}
-.video-box.compact .play-badge svg {
-  width: 16px;
-  height: 16px;
-}
-.video-box.compact .video-label {
-  font-size: 8px;
-  padding: 8px 5px 3px;
-}
-.video-box.compact .video-label > span {
-  display: none;
-}
-.video-box.compact .video-handle {
-  padding: 0 3px;
-  gap: 2px;
-}
-.video-box.compact .video-handle > span {
-  display: none;
-}
-.video-handle button {
-  min-width: 26px;
-  justify-content: center;
-}
-.video-handle button + button {
-  margin-left: 0;
-}
-.video-handle {
-  min-width: 136px;
-}
 .video-box.collapsed {
   background: transparent;
   box-shadow: none;
@@ -2020,9 +1886,6 @@ body,
   color: #27312f;
   border: 1px solid #27312f4d;
   box-shadow: 0 1px 4px #0002;
-}
-.video-box.collapsed .video-handle {
-  min-width: 80px;
 }
 .video-resize[hidden] {
   display: none;
@@ -2060,12 +1923,6 @@ body,
     display: none;
   }
 }
-.video-resize {
-  width: 32px;
-  height: 32px;
-  right: -12px;
-  bottom: -12px;
-}
 @media (max-width: 700px) {
   .editor-header {
     min-height: 62px;
@@ -2079,12 +1936,8 @@ body,
     flex: 1;
     max-width: none;
   }
-  .header-end .secondary,
-  .lecture-button {
+  .header-end .secondary {
     min-height: 40px;
-  }
-  .lecture .toolbar {
-    flex-wrap: wrap;
   }
 }
 .pdf-page {
@@ -2099,44 +1952,22 @@ body,
   pointer-events: none;
   z-index: 15;
 }
-.lecture .toolbar {
-  min-height: 62px;
-  padding: 3px 12px;
-  gap: 3px;
+.is-fullscreen .toolbar {
+  min-height: 58px;
+  padding: 3px 10px;
+  gap: 4px;
 }
-.lecture .tool-button {
-  min-width: 48px;
-  height: 54px;
+.is-fullscreen .tool-button {
+  min-width: 44px;
+  height: 48px;
 }
-.lecture .tool-group {
-  gap: 2px;
-}
-.lecture .toolbar-divider {
-  margin: 0 3px;
-}
-.lecture .history-tools .icon-button,
-.lecture .settings-menu > .icon-button {
-  min-width: 36px;
-}
-.lecture .color-picker {
-  display: none;
-}
-.lecture .ink-settings {
-  gap: 2px;
-}
-.lecture .width-select select {
-  max-width: 59px;
-}
-.lecture .toolbar:has(.lecture-video-actions) {
-  flex-wrap: wrap;
-}
-.lecture-video-actions {
+.toolbar-video-actions {
   display: flex;
   align-items: center;
   border-inline-start: 1px solid var(--line);
   padding-inline-start: 4px;
 }
-.lecture-video-actions button {
+.toolbar-video-actions button {
   display: grid;
   place-items: center;
   width: 38px;
@@ -2145,29 +1976,16 @@ body,
   border-radius: 6px;
   color: inherit;
 }
-.lecture-video-actions button:hover,
-.lecture-video-actions button:focus-visible {
+.toolbar-video-actions button:hover,
+.toolbar-video-actions button:focus-visible {
   background: #e9eee5;
 }
-.lecture-save-indicator {
+.toolbar-save-indicator {
   display: flex;
   align-items: center;
   justify-content: center;
   width: 23px;
   color: #87997b;
-}
-.lecture-exit {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 5px;
-  min-height: 44px;
-  padding: 7px 10px;
-  border: 1px solid var(--line);
-  background: #fff;
-  border-radius: 7px;
-  font-size: 10px;
-  white-space: nowrap;
 }
 .eraser-preview {
   border: 1px solid #73847b;
