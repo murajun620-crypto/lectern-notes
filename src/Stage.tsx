@@ -44,6 +44,9 @@ type ContactStart = Pick<
 >;
 type PencilContact = {
   downAt: number;
+  recoveredStart?: 'pointermove' | 'touchmove';
+  confirmedStart?: boolean;
+  endAt?: number;
   pointerId?: number;
   touchId?: number;
   touchDownAt?: number;
@@ -168,6 +171,9 @@ export default function Stage({
     erasure?: { id: string; width: number };
   } | null>(null);
   const stylusContact = useRef<number | null>(null);
+  // Do not adopt stale motion from a finished contact or one that started on a control.
+  const knownPencilIds = useRef(new Set<number>());
+  const latestPencilEnd = useRef(-Infinity);
   const pencilFinish = useRef<{ timer: ReturnType<typeof setTimeout>; finish: () => void } | null>(
     null,
   );
@@ -277,6 +283,7 @@ export default function Stage({
     preparingLiveInk,
     paintInkPreview: paintInk,
     previewStroke,
+    previewPencilStroke,
     clearDraft,
     previewErasure,
     finishErasure,
@@ -402,6 +409,43 @@ export default function Stage({
     setLasso([]);
     setPasteAnchor(null);
   }, [tool]);
+  useEffect(() => {
+    const remember = (id: number) => {
+      const ids = knownPencilIds.current;
+      ids.delete(id);
+      ids.add(id);
+      if (ids.size > 64) ids.delete(ids.values().next().value!);
+    };
+    const pointer = (event: PointerEvent) => {
+      if (event.pointerType !== 'pen') return;
+      remember(event.pointerId);
+      if (event.type !== 'pointerdown')
+        latestPencilEnd.current = Math.max(latestPencilEnd.current, event.timeStamp);
+    };
+    const touch = (event: TouchEvent) => {
+      for (const contact of Array.from(event.changedTouches)) {
+        if ((contact as StylusTouch).touchType !== 'stylus') continue;
+        remember(contact.identifier);
+        if (event.type !== 'touchstart')
+          latestPencilEnd.current = Math.max(latestPencilEnd.current, event.timeStamp);
+      }
+    };
+    const pointerEvents = [
+      'pointerdown',
+      'pointerup',
+      'pointercancel',
+      'lostpointercapture',
+    ] as const;
+    const touchEvents = ['touchstart', 'touchend', 'touchcancel'] as const;
+    for (const type of pointerEvents)
+      document.addEventListener(type, pointer, { capture: true, passive: true });
+    for (const type of touchEvents)
+      document.addEventListener(type, touch, { capture: true, passive: true });
+    return () => {
+      for (const type of pointerEvents) document.removeEventListener(type, pointer, true);
+      for (const type of touchEvents) document.removeEventListener(type, touch, true);
+    };
+  }, []);
   useEffect(() => {
     const stage = viewport.current;
     if (stage && pencilDiagnostics) return pencilDiagnostics.attach(stage);
@@ -532,7 +576,10 @@ export default function Stage({
     const spacing = 0.25 / screenScale();
     for (const sample of samples) {
       const time = sample.timeStamp ?? event.timeStamp;
-      if (time < Math.max(pencil.downAt, pencil.lastPointerAt ?? 0) || time > event.timeStamp)
+      if (
+        time < Math.max(pencil.downAt, pencil.lastPointerAt ?? 0) ||
+        time > Math.min(event.timeStamp, pencil.endAt ?? Infinity)
+      )
         continue;
       pencil.lastPointerAt = time;
       packet.push(
@@ -876,6 +923,7 @@ export default function Stage({
           touchId,
           pointCount: g.points.length,
           recoveredEndpoint,
+          recoveredStart: g.pencil.recoveredStart,
           dx: ((last.x - g.start.x) * g.paperRect.width) / page.width,
           dy: ((last.y - g.start.y) * g.paperRect.height) / page.height,
         });
@@ -894,9 +942,11 @@ export default function Stage({
   const endPencil = (
     g: NonNullable<typeof gesture.current>,
     source: 'pointer' | 'touch',
+    time: number,
     waitForShortTouch = false,
   ) => {
     const pencil = g.pencil!;
+    pencil.endAt = Math.min(pencil.endAt ?? Infinity, time);
     if (source === 'pointer') pencil.pointerEnded = true;
     else pencil.touchEnded = true;
     const waiting =
@@ -911,9 +961,9 @@ export default function Stage({
       pencilFinish.current = { finish, timer: setTimeout(finish, 24) };
     }
   };
-  const endTouchPointerForPencil = (id: number) => {
+  const endTouchPointerForPencil = (id: number, time: number) => {
     const g = gesture.current;
-    if (g?.pencil?.touchId === id && !g.pencil.pointerEnded) endPencil(g, 'pointer');
+    if (g?.pencil?.touchId === id && !g.pencil.pointerEnded) endPencil(g, 'pointer', time);
   };
   const preparePencil = () => {
     stopCoast();
@@ -930,15 +980,59 @@ export default function Stage({
     pinch.current = null;
     tap.current = null;
   };
-  const pencilWrites = () => {
-    const writingTool = effectiveTool(tool, pencilTool, 'pen', fingerInk);
-    return writingTool === 'pen' || writingTool === 'highlighter';
-  };
+  const writingTool = effectiveTool(tool, pencilTool, 'pen', fingerInk);
+  const writingWithPencil = writingTool === 'pen' || writingTool === 'highlighter';
+  useLayoutEffect(() => {
+    const stage = viewport.current;
+    if (!stage || !writingWithPencil) return;
+    // Claim Pencil taps at the DOM target before Safari interprets nearby
+    // contacts as a system gesture. Let the normal ink handlers receive them.
+    const claimPencilTap = (event: TouchEvent) => {
+      if (!event.cancelable) return;
+      for (const touch of Array.from(event.changedTouches)) {
+        const { touchType } = touch as StylusTouch;
+        const knownEnd =
+          !touchType && event.type === 'touchend' && touch.identifier === stylusContact.current;
+        if (touchType !== 'stylus' && !knownEnd) continue;
+        const target = touch.target ?? event.target;
+        if (
+          target instanceof Element &&
+          !target.closest('.video-box,[data-video-control],[data-selection-control]')
+        ) {
+          event.preventDefault();
+          return;
+        }
+      }
+    };
+    const options = { capture: true, passive: false };
+    stage.addEventListener('touchstart', claimPencilTap, options);
+    stage.addEventListener('touchend', claimPencilTap, options);
+    return () => {
+      stage.removeEventListener('touchstart', claimPencilTap, true);
+      stage.removeEventListener('touchend', claimPencilTap, true);
+    };
+  }, [writingWithPencil]);
   const startPencil = (e: ContactStart, source: 'pointer' | 'touch', capture?: () => void) => {
     const g = gesture.current;
     const pencil = g?.pencil;
     const otherId = source === 'pointer' ? pencil?.touchId : pencil?.pointerId;
     const ownId = source === 'pointer' ? pencil?.pointerId : pencil?.touchId;
+    const lateStart =
+      g &&
+      pencil &&
+      ownId === e.pointerId &&
+      !pencil.confirmedStart &&
+      pencil.recoveredStart === (source === 'pointer' ? 'pointermove' : 'touchmove') &&
+      !pencil.pointerEnded &&
+      !pencil.touchEnded &&
+      (e.timeStamp <= pencil.downAt ||
+        (e.timeStamp - pencil.downAt <= 48 &&
+          Math.hypot(g.client.x - e.clientX, g.client.y - e.clientY) <= 6));
+    if (lateStart) {
+      pencil.confirmedStart = true;
+      capture?.();
+      return;
+    }
     const companion =
       g &&
       pencil &&
@@ -970,7 +1064,73 @@ export default function Stage({
       palm.current.penDown(nativePencil, performance.now());
     }
   };
+  const recoverPencil = (e: ContactStart, source: 'pointer' | 'touch') => {
+    if (
+      !writingWithPencil ||
+      (e.target as Element).closest(
+        'button, a, input, select, textarea, .video-box, [data-video-control], [data-ink-resize], [data-selection-control]',
+      )
+    )
+      return;
+    const pencil = gesture.current?.pencil;
+    if (pencil) {
+      // An active contact on the companion stream can verify a missing start on this stream.
+      const own = source === 'pointer' ? pencil.pointerId : pencil.touchId;
+      const other = source === 'pointer' ? pencil.touchId : pencil.pointerId;
+      if (
+        own !== undefined ||
+        other !== e.pointerId ||
+        pencil.pointerEnded ||
+        pencil.touchEnded ||
+        e.timeStamp < pencil.downAt
+      )
+        return;
+    } else {
+      if (
+        knownPencilIds.current.has(e.pointerId) ||
+        e.timeStamp <= latestPencilEnd.current ||
+        gesture.current
+      )
+        return;
+      if (!stack.active) {
+        const r = paper.current!.getBoundingClientRect();
+        if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom)
+          return;
+      }
+    }
+    startPencil(e, source);
+    if (!pencil && gesture.current?.pencil)
+      gesture.current.pencil.recoveredStart = source === 'pointer' ? 'pointermove' : 'touchmove';
+  };
   const move = (e: ReactPointerEvent) => {
+    if (
+      e.pointerType === 'pen' &&
+      (e.buttons & 1) !== 0 &&
+      gesture.current?.pencil?.pointerId === undefined
+    ) {
+      const sample =
+        e.nativeEvent
+          .getCoalescedEvents?.()
+          .find(
+            (p) =>
+              (p.pointerId === undefined || p.pointerId === e.pointerId) &&
+              (p.buttons & 1) !== 0 &&
+              p.timeStamp <= e.timeStamp,
+          ) ?? e;
+      recoverPencil(
+        {
+          pointerId: e.pointerId,
+          pointerType: 'pen',
+          button: 0,
+          target: e.target,
+          clientX: sample.clientX,
+          clientY: sample.clientY,
+          pressure: sample.pressure,
+          timeStamp: sample.timeStamp,
+        },
+        'pointer',
+      );
+    }
     showEraser(e);
     const initial = tap.current?.starts.get(e.pointerId);
     if (initial && Math.hypot(e.clientX - initial.x, e.clientY - initial.y) > 12)
@@ -1008,7 +1168,7 @@ export default function Stage({
     if (g.kind === 'draw') {
       if (g.pencil) {
         if (!g.pencil.pointerEnded && !g.pencil.touchEnded && appendPencilSamples(e.nativeEvent, g))
-          previewStroke(g.stroke!);
+          previewPencilStroke(g.stroke!);
       } else {
         const before = g.points.length;
         appendSamples(e, g);
@@ -1053,7 +1213,7 @@ export default function Stage({
     if (g.pencil) {
       if (!g.pencil.pointerEnded && e.timeStamp >= g.pencil.downAt) {
         if (!cancel) appendPencilSamples(e.nativeEvent, g, true);
-        endPencil(g, 'pointer', !cancel && g.points.length === 1);
+        endPencil(g, 'pointer', e.timeStamp, !cancel && g.points.length === 1);
       }
       return;
     }
@@ -1133,6 +1293,7 @@ export default function Stage({
       const distance = Math.hypot(contact.clientX - g.client.x, contact.clientY - g.client.y);
       if (
         !cancel &&
+        !pencil.recoveredStart &&
         g.points.length === 1 &&
         elapsed >= 0 &&
         elapsed <= 120 &&
@@ -1142,7 +1303,7 @@ export default function Stage({
         // The identified native contact can be the only source of an endpoint for a tiny mark.
         pencil.shortTouchEnd = { ...point(contact, g.paperRect), p: g.start.p };
       }
-      endPencil(g, 'touch');
+      endPencil(g, 'touch', e.timeStamp);
     }
     return true;
   };
@@ -1217,7 +1378,7 @@ export default function Stage({
         const target = e.target as Element;
         if (e.pointerType === 'pen') {
           if (
-            !pencilWrites() ||
+            !writingWithPencil ||
             target.closest('.video-box,[data-video-control],[data-selection-control]')
           )
             preparePencil();
@@ -1255,7 +1416,7 @@ export default function Stage({
         if (g?.pencil?.touchId === e.pointerId && !g.pencil.touchEnded) {
           // The matching native stylus contact is stronger evidence than pointerType.
           if (!g.pencil.pointerEnded && appendPencilSamples(e.nativeEvent, g))
-            previewStroke(g.stroke!);
+            previewPencilStroke(g.stroke!);
           e.preventDefault();
           e.stopPropagation();
         } else if (!palm.current.allowsTouch(e.pointerId)) {
@@ -1266,7 +1427,7 @@ export default function Stage({
       onPointerUpCapture={(e) => {
         if (e.pointerType === 'pen') palm.current.penUp(e.pointerId, performance.now());
         if (e.pointerType === 'touch') {
-          endTouchPointerForPencil(e.pointerId);
+          endTouchPointerForPencil(e.pointerId, e.timeStamp);
           const accepted = palm.current.allowsTouch(e.pointerId);
           palm.current.touchUp(e.pointerId, performance.now());
           if (!accepted) {
@@ -1278,7 +1439,7 @@ export default function Stage({
       onPointerCancelCapture={(e) => {
         if (e.pointerType === 'pen') palm.current.penUp(e.pointerId, performance.now());
         if (e.pointerType === 'touch') {
-          endTouchPointerForPencil(e.pointerId);
+          endTouchPointerForPencil(e.pointerId, e.timeStamp);
           palm.current.touchUp(e.pointerId);
         }
       }}
@@ -1299,7 +1460,7 @@ export default function Stage({
       }}
       onPointerDown={(e) => {
         const capture = () => e.currentTarget.setPointerCapture(e.pointerId);
-        if (e.pointerType === 'pen' && pencilWrites()) startPencil(e, 'pointer', capture);
+        if (e.pointerType === 'pen' && writingWithPencil) startPencil(e, 'pointer', capture);
         else {
           pencilFinish.current?.finish();
           downOnPage(e, capture);
@@ -1312,7 +1473,7 @@ export default function Stage({
         if (stylus) {
           const target = e.target as Element;
           if (
-            pencilWrites() &&
+            writingWithPencil &&
             !target.closest('.video-box,[data-video-control],[data-selection-control]')
           ) {
             startPencil(
@@ -1419,12 +1580,38 @@ export default function Stage({
       }}
       onTouchMove={(e) => {
         const contact = Array.from(e.changedTouches).find(
-          (t) => t.identifier === stylusContact.current,
+          (t) =>
+            t.identifier === stylusContact.current || (t as StylusTouch).touchType === 'stylus',
         );
         if (contact) {
+          if (
+            stylusContact.current !== contact.identifier &&
+            (contact as StylusTouch).touchType === 'stylus' &&
+            Array.from(e.touches ?? []).some((t) => t.identifier === contact.identifier)
+          ) {
+            recoverPencil(
+              {
+                pointerId: contact.identifier,
+                pointerType: 'pen',
+                button: 0,
+                target: contact.target ?? e.target,
+                clientX: contact.clientX,
+                clientY: contact.clientY,
+                pressure: (contact as StylusTouch).force ?? 0,
+                timeStamp: e.timeStamp,
+              },
+              'touch',
+            );
+          }
           const g = gesture.current;
           const pencil = g?.pencil;
-          if (g && pencil?.touchId === contact.identifier && !pencil.touchEnded) {
+          if (
+            g &&
+            pencil?.touchId === contact.identifier &&
+            !pencil.touchEnded &&
+            e.timeStamp >= (pencil.touchDownAt ?? pencil.downAt) &&
+            e.timeStamp <= (pencil.endAt ?? Infinity)
+          ) {
             const p = point(
               {
                 clientX: contact.clientX,
@@ -1444,7 +1631,7 @@ export default function Stage({
               );
             if (!repeatsPointer && appendPencilPoint(g.points, p)) {
               pencil.lastWasTouch = true;
-              previewStroke(g.stroke!);
+              previewPencilStroke(g.stroke!);
             }
           }
           return;

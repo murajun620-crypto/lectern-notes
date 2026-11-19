@@ -480,6 +480,15 @@ export function useInkLayer({
     draft.current = stroke;
     if (draftFrame.current === null) draftFrame.current = requestAnimationFrame(paintDraft);
   };
+  const previewPencilStroke = (stroke: Stroke) => {
+    if (draft.current !== stroke) {
+      // Keep touchdown jitter in the stroke data without flashing a round nib before it moves.
+      const start = stroke.points[0];
+      const distance = Math.min(3, Math.max(1.5, (stroke.width * actualScale) / 2)) / actualScale;
+      if (!stroke.points.some((p) => Math.hypot(p.x - start.x, p.y - start.y) >= distance)) return;
+    }
+    previewStroke(stroke);
+  };
 
   const paintErasure = useCallback(() => {
     eraseFrame.current = null;
@@ -744,6 +753,7 @@ export function useInkLayer({
     preparingLiveInk: () => liveRequest.current !== null,
     paintInkPreview,
     previewStroke,
+    previewPencilStroke,
     clearDraft,
     previewErasure,
     finishErasure,

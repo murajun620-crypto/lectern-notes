@@ -1,4 +1,5 @@
 type Contact = { clientX: number; clientY: number };
+type Origin = { contact: Contact; fromMove: boolean };
 type StylusTouch = Touch & { touchType?: string; force?: number };
 
 const eventLimit = 8192;
@@ -23,8 +24,8 @@ export function createPencilDiagnostics() {
 
   const attach = (stage: HTMLElement) => {
     const document = stage.ownerDocument;
-    const pointerStarts = new Map<number, Contact>();
-    const touchStarts = new Map<number, Contact>();
+    const pointerStarts = new Map<number, Origin>();
+    const touchStarts = new Map<number, Origin>();
     const inStage = (target: EventTarget | null) =>
       target instanceof Node && stage.contains(target);
     const relative = (contact: Contact, start: Contact) => ({
@@ -41,8 +42,11 @@ export function createPencilDiagnostics() {
         inStage: inStage(event.target),
         timeMs: round(event.timeStamp - startedAt),
       };
-      if (type === 'pointerdown' && pointerType === 'pen' && entry.inStage)
-        pointerStarts.set(id, event);
+      if (pointerType === 'pen' && entry.inStage) {
+        if (type === 'pointerdown') pointerStarts.set(id, { contact: event, fromMove: false });
+        else if (type === 'pointermove' && event.buttons & 1 && !pointerStarts.has(id))
+          pointerStarts.set(id, { contact: event, fromMove: true });
+      }
       const start = pointerStarts.get(id) ?? touchStarts.get(id);
       if (!start || !entry.inStage) {
         if (type !== 'pointermove') record(entry);
@@ -52,14 +56,15 @@ export function createPencilDiagnostics() {
       const coalesced = event.getCoalescedEvents?.() ?? [];
       record({
         ...entry,
-        ...relative(event, start),
+        ...relative(event, start.contact),
+        ...(start.fromMove && { originFromMove: true }),
         pressure: event.pressure,
         buttons: event.buttons,
         coalescedCount: coalesced.length,
         coalesced: coalesced.slice(-16).map((sample) => ({
           type: sample.type,
           timeMs: round(sample.timeStamp - startedAt),
-          ...relative(sample, start),
+          ...relative(sample, start.contact),
           pressure: sample.pressure,
           buttons: sample.buttons,
         })),
@@ -78,15 +83,19 @@ export function createPencilDiagnostics() {
           timeMs: round(event.timeStamp - startedAt),
           activeTouches: event.touches.length,
         };
-        if (type === 'touchstart' && touchType === 'stylus' && entry.inStage)
-          touchStarts.set(id, contact);
-        const start = touchStarts.get(id) ?? (touchType === 'stylus' ? contact : undefined);
-        if (start && entry.inStage) {
+        if (touchType === 'stylus' && entry.inStage) {
+          if (type === 'touchstart') touchStarts.set(id, { contact, fromMove: false });
+          else if (type === 'touchmove' && !touchStarts.has(id))
+            touchStarts.set(id, { contact, fromMove: true });
+        }
+        const start = touchStarts.get(id);
+        if ((start || touchType === 'stylus') && entry.inStage) {
           record({
             ...entry,
-            ...relative(contact, start),
+            ...relative(contact, start?.contact ?? contact),
+            ...(start?.fromMove && { originFromMove: true }),
             force,
-            startedInStage: touchStarts.has(id),
+            startedInStage: !!start && !start.fromMove,
           });
         } else if (type !== 'touchmove') record(entry);
         if (type === 'touchend' || type === 'touchcancel') touchStarts.delete(id);
@@ -117,6 +126,7 @@ export function createPencilDiagnostics() {
       touchId?: number;
       pointCount: number;
       recoveredEndpoint: boolean;
+      recoveredStart?: 'pointermove' | 'touchmove';
       dx: number;
       dy: number;
     }) {

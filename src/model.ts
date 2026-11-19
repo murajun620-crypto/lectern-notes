@@ -1,4 +1,4 @@
-import { getStroke } from 'perfect-freehand';
+import { getStrokeOutlinePoints, getStrokePoints } from 'perfect-freehand';
 export type Tool = 'pen' | 'highlighter' | 'eraser' | 'select' | 'laser' | 'hand';
 export const penKinds = ['ballpoint', 'fountain', 'pencil', 'brush'] as const;
 export type PenKind = (typeof penKinds)[number];
@@ -217,9 +217,10 @@ export function penOutline(stroke: Stroke) {
     }
     return [p.x, p.y, pressure];
   });
-  if (samples.length === 2) {
-    // A segment with only two samples needs brush caps, not inferred intermediate motion.
-    const [start, end] = samples;
+  if (samples.length === 2 || (!penKind && samples.length === 1)) {
+    // Round caps at the actual contacts also give a stationary tap a centered circular nib.
+    const start = samples[0];
+    const end = samples.at(-1)!;
     const direction = Math.atan2(end[1] - start[1], end[0] - start[0]);
     const outline: number[][] = [];
     for (const [i, [x, y, pressure]] of [end, start].entries()) {
@@ -231,7 +232,7 @@ export function penOutline(stroke: Stroke) {
     }
     return outline;
   }
-  return getStroke(samples, {
+  const options = {
     size: width,
     thinning,
     smoothing: 0.65,
@@ -242,7 +243,25 @@ export function penOutline(stroke: Stroke) {
       start: { taper: width * 0.65 * taper },
       end: { taper: width * 2.6 * taper },
     }),
-  });
+  };
+  const path = getStrokePoints(samples, options);
+  const length = path.at(-1)?.runningLength ?? 0;
+  if (!penKind && length > 0 && length < 3) {
+    // perfect-freehand skips vertices within three units of the end. On an entire
+    // sub-three-unit mark that skips the start as well, inflating its round cap.
+    // Construct this outline in larger units and map it back to page coordinates.
+    const scale = 4 / length;
+    for (const p of path) {
+      p.point = [p.point[0] * scale, p.point[1] * scale];
+      p.distance *= scale;
+      p.runningLength *= scale;
+    }
+    return getStrokeOutlinePoints(path, { ...options, size: width * scale }).map(([x, y]) => [
+      x / scale,
+      y / scale,
+    ]);
+  }
+  return getStrokeOutlinePoints(path, options);
 }
 
 type InkBounds = { left: number; top: number; right: number; bottom: number };

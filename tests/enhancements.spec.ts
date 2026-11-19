@@ -294,6 +294,53 @@ test('Pencil writes in hand mode, a resting palm stays blocked, and two-finger t
 test.describe('Pencil contact samples', () => {
   test.use({ viewport: { width: 1024, height: 768 }, deviceScaleFactor: 2 });
 
+  test('claims Pencil taps on the writing surface and leaves finger and video taps available', async ({
+    page,
+  }) => {
+    await demo(page);
+    await page.getByRole('button', { name: 'YouTube挿入' }).click();
+    await page.getByLabel('YouTube URL').fill('https://youtu.be/M7lc1UVf-VE');
+    await page.getByRole('button', { name: 'このページに追加' }).click();
+    const stage = page.getByTestId('stage');
+    const tryTaps = () =>
+      stage.evaluate((el) => {
+        const paper = el.querySelector('[data-testid=pdf-page]')!;
+        const video = el.querySelector('.video-box button')!;
+        const rect = paper.getBoundingClientRect();
+        const tap = (target: Element, touchType: string) => {
+          const contact = {
+            identifier: 17,
+            touchType,
+            target,
+            clientX: rect.left + rect.width / 3,
+            clientY: rect.top + rect.height / 3,
+          };
+          return ['touchstart', 'touchend'].map((type) => {
+            const event = new Event(type, { bubbles: true, cancelable: true });
+            Object.defineProperties(event, {
+              changedTouches: { value: [contact] },
+              touches: { value: type === 'touchend' ? [] : [contact] },
+            });
+            target.dispatchEvent(event);
+            return event.defaultPrevented;
+          });
+        };
+        return [tap(paper, 'stylus'), tap(paper, 'direct'), tap(video, 'stylus')];
+      });
+    await expect(page.getByTestId('video-box')).toBeVisible();
+    expect(await tryTaps()).toEqual([
+      [true, true],
+      [false, false],
+      [false, false],
+    ]);
+    await page.getByRole('button', { name: 'レーザー', exact: true }).click();
+    expect(await tryTaps()).toEqual([
+      [false, false],
+      [false, false],
+      [false, false],
+    ]);
+  });
+
   test('exports Pencil events and committed samples only for the recorded interval', async ({
     page,
   }) => {
@@ -387,6 +434,45 @@ test.describe('Pencil contact samples', () => {
       },
     ]);
     for (const event of report.events.slice(0, 4)) expect(event).not.toHaveProperty('dx');
+  });
+
+  test('keeps tiny initial Pencil movements off the draft and preserves them when lifted', async ({
+    page,
+  }) => {
+    await demo(page);
+    const paper = (await page.getByTestId('pdf-page').boundingBox())!;
+    const x = Math.round(paper.x + paper.width / 2);
+    const y = Math.round(paper.y + paper.height / 2);
+    const tip = (identifier: number, dx: number) => ({
+      identifier,
+      clientX: x + dx,
+      clientY: y,
+      touchType: 'stylus',
+      force: 0.02,
+    });
+    const alpha = (layer: string, dx = 0) =>
+      page.locator(layer).evaluate(
+        async (canvas: HTMLCanvasElement, at) => {
+          await new Promise(requestAnimationFrame);
+          await new Promise(requestAnimationFrame);
+          const box = canvas.getBoundingClientRect();
+          const px = Math.floor(((at.x - box.left) * canvas.width) / box.width);
+          const py = Math.floor(((at.y - box.top) * canvas.height) / box.height);
+          const data = canvas.getContext('2d')!.getImageData(px - 2, py - 2, 5, 5).data;
+          return Math.max(...data.filter((_, i) => i % 4 === 3));
+        },
+        { x: x + dx, y },
+      );
+    await nativeTouch(page, 'touchstart', [tip(51, 0)]);
+    await nativeTouch(page, 'touchmove', [tip(51, 1.25)]);
+    expect(await alpha('.ink-draft-canvas')).toBe(0);
+    await nativeTouch(page, 'touchend', [], [tip(51, 40)]);
+    await expect.poll(() => alpha('.ink-canvas')).toBeGreaterThan(0);
+    expect(await alpha('.ink-canvas', 10)).toBe(0);
+    await nativeTouch(page, 'touchstart', [tip(52, 20)]);
+    await nativeTouch(page, 'touchmove', [tip(52, 25)]);
+    await expect.poll(() => alpha('.ink-draft-canvas', 22)).toBeGreaterThan(0);
+    await nativeTouch(page, 'touchend', [], [tip(52, 25)]);
   });
 
   test('uses finger-classified moves only for a matching native stylus contact and stops at release', async ({
@@ -588,6 +674,8 @@ test.describe('Pencil contact samples', () => {
         };
         const touch = (type: string, dx: number, dy = 0) => {
           const event = new Event(type, { bubbles: true });
+          const elapsed = type === 'touchstart' ? 0 : type === 'touchmove' ? 2 : 8;
+          Object.defineProperty(event, 'timeStamp', { value: now + elapsed });
           const contact = {
             identifier: id,
             touchType: 'stylus',

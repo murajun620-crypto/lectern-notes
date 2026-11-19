@@ -104,6 +104,21 @@ describe('smooth pressure-bearing stroke outline', () => {
       expect(points.flat().every(Number.isFinite)).toBe(true);
     }
   });
+  it('keeps a tap centered and the cap of a short, densely sampled mark within its nib radius', () => {
+    for (const offsets of [[0], [0, 0.5, 1, 1.5, 2]]) {
+      const outline = penOutline({
+        ...stroke,
+        width: 1,
+        points: offsets.map((dx) => ({ x: 100 + dx, y: 200, p: 0.5 })),
+      });
+      const xs = outline.map(([x]) => x);
+      const ys = outline.map(([, y]) => y);
+      expect(Math.min(...xs)).toBeCloseTo(99.5, 1);
+      expect(Math.max(...xs)).toBeCloseTo(100.5 + offsets.at(-1)!, 1);
+      expect(Math.min(...ys)).toBeCloseTo(199.5, 1);
+      expect(Math.max(...ys)).toBeCloseTo(200.5, 1);
+    }
+  });
   it('keeps very light pressure visible and still varies width with pressure', () => {
     const extent = (p: number) => {
       const outline = penOutline({ ...stroke, points: stroke.points.map((pt) => ({ ...pt, p })) });
