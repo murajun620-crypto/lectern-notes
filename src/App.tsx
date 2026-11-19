@@ -58,6 +58,7 @@ import {
   penWidths,
 } from './input';
 import type { PencilTool } from './input';
+import { createInkControlGuard } from './ink-control-guard';
 import { initialVideoRect } from './video-layout';
 import { PlaybackButtons } from './VideoBox';
 import type { PlaybackActions, RegisterPlayback } from './VideoBox';
@@ -224,6 +225,7 @@ export default function App() {
     [initialized, setInitialized] = useState(false);
   const [inkClipboard, setInkClipboard] = useState<Stroke[]>([]);
   const [inkPriority] = useState(createInkPriority);
+  const [inkControlGuard] = useState(() => createInkControlGuard(inkPriority));
   const [tool, setTool] = useState<Tool>('pen'),
     [colorChoices, setColorChoices] = useState<Record<WritingTool, number | string>>({
       pen: 0,
@@ -595,9 +597,98 @@ export default function App() {
   const visibleProjects = projects.filter((p) =>
     p.name.toLowerCase().includes(query.toLowerCase()),
   );
+  const pageAndViewControls = project && (
+    <>
+      <div className="page-navigation">
+        <IconButton
+          label="前のページ"
+          onClick={() => navigate(-1)}
+          disabled={project.currentPage === 0}
+        >
+          <ChevronLeft size={18} />
+        </IconButton>
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            const n = Number(jump);
+            if (Number.isInteger(n) && n >= 1 && n <= project.pages.length)
+              update((p) => ({ ...p, currentPage: n - 1 }));
+            else setJump(String(project.currentPage + 1));
+          }}
+        >
+          <input
+            aria-label="ページ番号"
+            inputMode="numeric"
+            value={jump}
+            onChange={(e) => setJump(e.target.value)}
+            onBlur={() => setJump(String(project.currentPage + 1))}
+          />
+          <span>/ {project.pages.length}</span>
+        </form>
+        <IconButton
+          label="次のページ"
+          onClick={() => navigate(1)}
+          disabled={project.currentPage === project.pages.length - 1}
+        >
+          <ChevronRight size={18} />
+        </IconButton>
+      </div>
+      <div className="zoom-control">
+        <select
+          aria-label="ページ表示"
+          title="ページ表示"
+          value={preferences.pageMode}
+          onChange={(e) =>
+            setPreferences((p) => ({
+              ...p,
+              pageMode: e.target.value === 'single' ? 'single' : 'continuous',
+            }))
+          }
+        >
+          <option value="continuous">連続</option>
+          <option value="single">1ページずつ</option>
+        </select>
+        <select
+          aria-label="表示方法"
+          value={fitWidth ? 'width' : 'page'}
+          onChange={(e) => {
+            setFitWidth(e.target.value === 'width');
+            setZoom(1);
+          }}
+        >
+          <option value="page">ページ全体</option>
+          <option value="width">幅に合わせる</option>
+        </select>
+        <button
+          onClick={() => {
+            setFitWidth(false);
+            setZoom(1);
+          }}
+          title="ページ全体を表示"
+        >
+          フィット
+        </button>
+        <select
+          aria-label="表示倍率"
+          value={Number(zoom.toFixed(2))}
+          onChange={(e) => setZoom(Number(e.target.value))}
+        >
+          {!pageZoomSteps.includes(Number(zoom.toFixed(2))) && (
+            <option value={Number(zoom.toFixed(2))}>{Math.round(zoom * 100)}%</option>
+          )}
+          {pageZoomSteps.map((z) => (
+            <option key={z} value={z}>
+              {z * 100}%
+            </option>
+          ))}
+        </select>
+      </div>
+    </>
+  );
   return (
     <div
       className={`app ${project ? 'editor' : 'library'} ${fullscreen ? 'is-fullscreen' : ''}`}
+      {...inkControlGuard}
       onClick={(e) => {
         const target = e.target as Element;
         for (const menu of document.querySelectorAll('details[open]'))
@@ -829,7 +920,7 @@ export default function App() {
       ) : (
         <>
           {(!fullscreen || documentTools) && (
-            <header className="editor-header" id="document-tools">
+            <header className="editor-header" id="document-tools" data-ink-controls="">
               <IconButton label="ライブラリに戻る" onClick={returnLibrary}>
                 <ArrowLeft size={21} />
               </IconButton>
@@ -878,7 +969,7 @@ export default function App() {
               </div>
             </header>
           )}
-          <div className="toolbar">
+          <div className="toolbar" data-ink-controls="">
             <div className="tool-group">
               {tools.map((t) => (
                 <button
@@ -1002,6 +1093,12 @@ export default function App() {
             >
               <LayoutGrid size={21} />
             </IconButton>
+            {!preferences.showFooter && (
+              <details className="page-view-menu">
+                <summary className="icon-button page-view-toggle">ページ・表示</summary>
+                <div className="page-view-dropdown">{pageAndViewControls}</div>
+              </details>
+            )}
             <details className="settings-menu">
               <summary className="icon-button" title="入力設定" aria-label="入力設定">
                 <Settings2 size={20} />
@@ -1058,6 +1155,19 @@ export default function App() {
                 </label>
                 <small>
                   Pencil本体のダブルタップはSafariの公開APIでは取得できません。画面への2本指タップを使えます。
+                </small>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={preferences.showFooter}
+                    onChange={(e) =>
+                      setPreferences((p) => ({ ...p, showFooter: e.target.checked }))
+                    }
+                  />{' '}
+                  下部バーを表示
+                </label>
+                <small>
+                  オフにすると、ページ送りと表示倍率は上部の「ページ・表示」から操作できます。
                 </small>
                 <div className="preset-settings">
                   {Object.values(inkPalettes).map(({ label, preference }) => (
@@ -1140,7 +1250,7 @@ export default function App() {
           </div>
           <div className="editor-body">
             {showSidebar && (
-              <aside className="page-sidebar">
+              <aside className="page-sidebar" data-ink-controls="">
                 <div className="sidebar-heading">
                   ページ <span>{project.pages.length}</span>
                 </div>
@@ -1231,6 +1341,7 @@ export default function App() {
                 <>
                   <button
                     className="edge-nav prev"
+                    data-ink-controls=""
                     aria-label="前のページ"
                     disabled={project.currentPage === 0}
                     onClick={() => navigate(-1)}
@@ -1239,6 +1350,7 @@ export default function App() {
                   </button>
                   <button
                     className="edge-nav next"
+                    data-ink-controls=""
                     aria-label="次のページ"
                     disabled={project.currentPage === project.pages.length - 1}
                     onClick={() => navigate(1)}
@@ -1249,104 +1361,23 @@ export default function App() {
               )}
             </div>
           </div>
-          <footer className="editor-footer">
-            <span className="footer-tool">
-              <span className="live-dot" /> {tools.find((t) => t.id === tool)?.label}ツール
-              {!fullscreen && (
-                <span className="footer-hint">
-                  {tool === 'hand'
-                    ? '動画のサムネイルをタップして配置を編集'
-                    : preferences.pageMode === 'continuous'
-                      ? 'Pencilで書く、指で上下にスクロール'
-                      : 'Pencilで書く、指でめくる'}
-                </span>
-              )}
-            </span>
-            <div className="page-navigation">
-              <IconButton
-                label="前のページ"
-                onClick={() => navigate(-1)}
-                disabled={project.currentPage === 0}
-              >
-                <ChevronLeft size={18} />
-              </IconButton>
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  const n = Number(jump);
-                  if (Number.isInteger(n) && n >= 1 && n <= project.pages.length)
-                    update((p) => ({ ...p, currentPage: n - 1 }));
-                  else setJump(String(project.currentPage + 1));
-                }}
-              >
-                <input
-                  aria-label="ページ番号"
-                  inputMode="numeric"
-                  value={jump}
-                  onChange={(e) => setJump(e.target.value)}
-                  onBlur={() => setJump(String(project.currentPage + 1))}
-                />
-                <span>/ {project.pages.length}</span>
-              </form>
-              <IconButton
-                label="次のページ"
-                onClick={() => navigate(1)}
-                disabled={project.currentPage === project.pages.length - 1}
-              >
-                <ChevronRight size={18} />
-              </IconButton>
-            </div>
-            <div className="zoom-control">
-              <select
-                aria-label="ページ表示"
-                title="ページ表示"
-                value={preferences.pageMode}
-                onChange={(e) =>
-                  setPreferences((p) => ({
-                    ...p,
-                    pageMode: e.target.value === 'single' ? 'single' : 'continuous',
-                  }))
-                }
-              >
-                <option value="continuous">連続</option>
-                <option value="single">1ページずつ</option>
-              </select>
-              <select
-                aria-label="表示方法"
-                value={fitWidth ? 'width' : 'page'}
-                onChange={(e) => {
-                  setFitWidth(e.target.value === 'width');
-                  setZoom(1);
-                }}
-              >
-                <option value="page">ページ全体</option>
-                <option value="width">幅に合わせる</option>
-              </select>
-              <button
-                onClick={() => {
-                  setFitWidth(false);
-                  setZoom(1);
-                }}
-                title="ページ全体を表示"
-              >
-                フィット
-              </button>
-              <select
-                aria-label="表示倍率"
-                value={Number(zoom.toFixed(2))}
-                onChange={(e) => setZoom(Number(e.target.value))}
-              >
-                {!pageZoomSteps.includes(Number(zoom.toFixed(2))) && (
-                  <option value={Number(zoom.toFixed(2))}>{Math.round(zoom * 100)}%</option>
+          {preferences.showFooter && (
+            <footer className="editor-footer" data-ink-controls="">
+              <span className="footer-tool">
+                <span className="live-dot" /> {tools.find((t) => t.id === tool)?.label}ツール
+                {!fullscreen && (
+                  <span className="footer-hint">
+                    {tool === 'hand'
+                      ? '動画のサムネイルをタップして配置を編集'
+                      : preferences.pageMode === 'continuous'
+                        ? 'Pencilで書く、指で上下にスクロール'
+                        : 'Pencilで書く、指でめくる'}
+                  </span>
                 )}
-                {pageZoomSteps.map((z) => (
-                  <option key={z} value={z}>
-                    {z * 100}%
-                  </option>
-                ))}
-              </select>
-            </div>
-          </footer>
+              </span>
+              {pageAndViewControls}
+            </footer>
+          )}
         </>
       )}
       {error && (

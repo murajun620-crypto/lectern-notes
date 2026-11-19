@@ -4,7 +4,7 @@ import type { PenKind, Tool } from './model';
 /** Leave a short window between letters for the next stroke to take priority. */
 export function createInkPriority() {
   let active = false;
-  let resumeAt = 0;
+  let endedAt = -Infinity;
   return {
     begin: () => {
       active = true;
@@ -12,9 +12,11 @@ export function createInkPriority() {
     end: () => {
       if (!active) return;
       active = false;
-      resumeAt = performance.now() + 140;
+      endedAt = performance.now();
     },
-    isBusy: () => active || performance.now() < resumeAt,
+    isBusy: () => active || performance.now() - endedAt < 140,
+    blocksControls: (pointerType: string) =>
+      active || (pointerType === 'touch' && performance.now() - endedAt < 230),
   };
 }
 export type InkPriority = ReturnType<typeof createInkPriority>;
@@ -33,6 +35,7 @@ export type InputPreferences = {
   pencilPressure: boolean;
   palmRejection: boolean;
   twoFingerTap: boolean;
+  showFooter: boolean;
   pageMode: 'continuous' | 'single';
   presets: string[];
   highlighterPresets: string[];
@@ -47,6 +50,7 @@ export const defaultInputPreferences: InputPreferences = {
   pencilPressure: false,
   palmRejection: true,
   twoFingerTap: true,
+  showFooter: true,
   pageMode: 'continuous',
   presets: ['#183e3a', '#cf4d44', '#447cbd'],
   highlighterPresets: ['#fff200', '#ff45bf', '#a6ff00'],
@@ -72,6 +76,7 @@ export function loadInputPreferences(): InputPreferences {
       pencilPressure: p.pencilPressure === true,
       palmRejection: p.palmRejection !== false,
       twoFingerTap: p.twoFingerTap !== false,
+      showFooter: p.showFooter !== false,
       pageMode: p.pageMode === 'single' ? 'single' : 'continuous',
       penKind: isPenKind(p.penKind) ? p.penKind : defaultInputPreferences.penKind,
       penWidth: penWidths.includes(p.penWidth) ? p.penWidth : defaultInputPreferences.penWidth,
