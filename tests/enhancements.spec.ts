@@ -486,6 +486,84 @@ test('a small Shorts placement plays upright at the saved size and can enlarge o
   expect((await stored(page))[0].pages[0].videos[0]).toEqual(savedVideo);
 });
 
+test('collapsed videos retain their placement and play without a lecture connection notice', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1024, height: 768 });
+  await page.route('https://www.youtube.com/iframe_api', (route) =>
+    route.fulfill({
+      contentType: 'application/javascript',
+      body: `
+        window.YT = { Player: class {
+          constructor(el, options) {
+            this.iframe = document.createElement('iframe');
+            this.iframe.src = 'about:blank';
+            el.replaceWith(this.iframe);
+            this.iframe.addEventListener('mock-error', () => options.events.onError({ data: 150 }));
+          }
+          destroy() { this.iframe.remove(); }
+        } };
+        window.onYouTubeIframeAPIReady();
+      `,
+    }),
+  );
+  await demo(page);
+  await page.getByRole('button', { name: 'YouTube挿入' }).click();
+  await page.getByLabel('YouTube URL').fill('https://www.youtube.com/shorts/M7lc1UVf-VE');
+  await page.getByRole('button', { name: 'このページに追加' }).click();
+  const box = page.getByTestId('video-box');
+  const play = box.getByRole('button', { name: '動画をページ内で再生' });
+  const thumbnail = box.locator('img');
+  const fold = box.getByTitle('動画を折りたたむ', { exact: true });
+  const unfold = box.getByTitle('折りたたみを解除', { exact: true });
+  const savedVideos = async () => (await stored(page))[0]?.pages[0].videos;
+  await expect.poll(savedVideos).toHaveLength(1);
+  const [original] = await savedVideos();
+  const unfolded = (await play.boundingBox())!;
+  await fold.click();
+  await expect(thumbnail).toHaveCount(0);
+  await expect(box.getByTitle('動画のサイズ変更')).toBeHidden();
+  const folded = (await play.boundingBox())!;
+  expect(folded.width).toBeCloseTo(44, 0);
+  expect(folded.height).toBeCloseTo(44, 0);
+  expect(folded.x).toBeCloseTo(unfolded.x, 0);
+  expect(folded.y).toBeCloseTo(unfolded.y, 0);
+  await unfold.click();
+  await expect(thumbnail).toHaveCount(1);
+  expect((await play.boundingBox())!.height).toBeCloseTo(unfolded.height, 0);
+  await fold.click();
+  await expect.poll(savedVideos).toEqual([{ ...original, collapsed: true }]);
+
+  await page.reload();
+  await expect(play).toBeVisible();
+  await expect(thumbnail).toHaveCount(0);
+  await page.getByRole('button', { name: '講義を始める', exact: true }).click();
+  const pageAnchor = () => box.evaluate((el) => [el.style.left, el.style.top]);
+  const anchorBeforePlay = await pageAnchor();
+  const lectureMarker = (await play.boundingBox())!;
+  await expect(unfold).toHaveCount(0);
+  await play.click();
+  const iframe = box.locator('iframe');
+  await expect(iframe).toBeVisible();
+  await expect(box.getByText('YouTubeに接続中…', { exact: true })).toHaveCount(0);
+  const player = (await box.boundingBox())!;
+  expect(player.width / player.height).toBeCloseTo(9 / 16);
+  expect(player.height).toBeGreaterThan(lectureMarker.height);
+  expect(await pageAnchor()).toEqual(anchorBeforePlay);
+  await iframe.dispatchEvent('mock-error');
+  await expect(box.getByRole('alert')).toContainText(
+    'この動画は埋め込み再生が許可されていません。',
+  );
+  await expect(box.getByRole('link', { name: 'YouTubeで開く' })).toHaveAttribute(
+    'href',
+    'https://www.youtube.com/watch?v=M7lc1UVf-VE',
+  );
+  await page.locator('.lecture .toolbar').getByTitle('動画を閉じる', { exact: true }).click();
+  await expect(play).toBeVisible();
+  await expect(thumbnail).toHaveCount(0);
+  expect((await play.boundingBox())!.width).toBeCloseTo(44, 0);
+});
+
 test('update check handles latest, offline and a saved reload without losing notes', async ({
   page,
 }) => {

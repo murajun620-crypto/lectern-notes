@@ -9,6 +9,8 @@ import {
   Minimize2,
   Minus,
   RotateCw,
+  PanelTopClose,
+  PanelTopOpen,
 } from 'lucide-react';
 import type { Video, Page } from './model';
 import {
@@ -134,8 +136,16 @@ export default function VideoBox({
   } | null>(null);
   const [preview, setPreview] = useState<Video | null>(null),
     previewRef = useRef<Video | null>(null);
-  const larger = playing ? enlargedVideoRect(v, page, pageScale * displayZoom, visibleBounds) : v;
-  const shown = playing && enlarged ? larger : preview || v;
+  const scale = pageScale * displayZoom;
+  const larger = playing ? enlargedVideoRect(v, page, scale, visibleBounds) : v;
+  const collapsed = v.collapsed && !playing;
+  const placement = preview ?? v;
+  const collapsedSize = 44 / scale;
+  const shown = collapsed
+    ? { ...placement, width: collapsedSize, height: collapsedSize }
+    : playing && enlarged
+      ? larger
+      : placement;
   const canResize = (enlarged || larger.width > v.width + 0.01) && !error;
   const toggleSize = useCallback(() => setEnlarged((value) => !value), []);
   const close = useCallback(() => {
@@ -157,7 +167,7 @@ export default function VideoBox({
     close,
     registerLecturePlayback,
   ]);
-  const compact = shown.width * pageScale * displayZoom < 180;
+  const compact = shown.width * scale < 180;
   const align =
     shown.x + shown.width / 2 > (visibleBounds.left + visibleBounds.right) / 2 ? 'right' : 'left';
   const actionsBelow = (shown.y - visibleBounds.top) * pageScale < 30;
@@ -245,7 +255,7 @@ export default function VideoBox({
   }, [playing, v.videoId]);
   return (
     <div
-      className={`video-box ${playing ? 'playing' : ''} ${editing ? 'editable' : ''} ${compact ? 'compact' : ''}`}
+      className={`video-box ${playing ? 'playing' : ''} ${editing ? 'editable' : ''} ${compact ? 'compact' : ''} ${collapsed ? 'collapsed' : ''}`}
       data-testid="video-box"
       data-player-state={playbackState}
       style={{
@@ -272,7 +282,7 @@ export default function VideoBox({
               <PlaybackButtons actions={{ enlarged, canResize, toggleSize, close }} />
             </div>
           )}
-          {(error || blocked || !ready) && (
+          {(error || blocked || (!lecture && !ready)) && (
             <div
               className={`video-status ${align} ${statusAbove ? 'above' : ''} ${statusBesideActions ? 'with-actions' : ''}`}
             >
@@ -297,24 +307,29 @@ export default function VideoBox({
         </>
       ) : (
         <button
+          type="button"
           className="video-thumbnail"
           aria-label="動画をページ内で再生"
           onClick={() => setPlaying(true)}
         >
-          <img
-            src={`https://i.ytimg.com/vi/${v.videoId}/hqdefault.jpg`}
-            alt="YouTube動画のサムネイル"
-            draggable={false}
-            onError={(e) => {
-              e.currentTarget.style.visibility = 'hidden';
-            }}
-          />
+          {!collapsed && (
+            <img
+              src={`https://i.ytimg.com/vi/${v.videoId}/hqdefault.jpg`}
+              alt="YouTube動画のサムネイル"
+              draggable={false}
+              onError={(e) => {
+                e.currentTarget.style.visibility = 'hidden';
+              }}
+            />
+          )}
           <span className="play-badge">
             <Play fill="currentColor" size={24} />
           </span>
-          <span className="video-label">
-            YouTube <span>ページ内で再生</span>
-          </span>
+          {!collapsed && (
+            <span className="video-label">
+              YouTube <span>ページ内で再生</span>
+            </span>
+          )}
         </button>
       )}
       {editing && !playing && (
@@ -355,19 +370,31 @@ export default function VideoBox({
           >
             <GripHorizontal size={16} />
             <span>移動</span>
+            {!collapsed && (
+              <>
+                <button
+                  title={v.width >= v.height ? '動画を縦長にする' : '動画を横長にする'}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={() => onChange(rotateVideo(v, page))}
+                >
+                  <RotateCw size={15} />
+                </button>
+                <button
+                  title="サムネイルを小さく"
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={() => onChange(resizeVideo(v, page, 0.7))}
+                >
+                  <Minus size={15} />
+                </button>
+              </>
+            )}
             <button
-              title={v.width >= v.height ? '動画を縦長にする' : '動画を横長にする'}
+              type="button"
+              title={collapsed ? '折りたたみを解除' : '動画を折りたたむ'}
               onPointerDown={(e) => e.stopPropagation()}
-              onClick={() => onChange(rotateVideo(v, page))}
+              onClick={() => onChange({ ...v, collapsed: !v.collapsed })}
             >
-              <RotateCw size={15} />
-            </button>
-            <button
-              title="サムネイルを小さく"
-              onPointerDown={(e) => e.stopPropagation()}
-              onClick={() => onChange(resizeVideo(v, page, 0.7))}
-            >
-              <Minus size={15} />
+              {collapsed ? <PanelTopOpen size={15} /> : <PanelTopClose size={15} />}
             </button>
             <button
               title="動画を削除"
@@ -379,6 +406,7 @@ export default function VideoBox({
           </div>
           <button
             className="video-resize"
+            hidden={collapsed}
             title="動画のサイズ変更"
             onPointerDown={(e) => {
               e.stopPropagation();

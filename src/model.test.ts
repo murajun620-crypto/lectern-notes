@@ -70,6 +70,14 @@ describe('backup validation', () => {
       { id: 'v', videoId: 'M7lc1UVf-VE', x: -40, y: 780, width: 160, height: 90 },
     ];
     expect(() => validateProject(p)).not.toThrow();
+    p.pages[0].videos[0].collapsed = true;
+    expect(() => validateProject(p)).not.toThrow();
+    expect(() =>
+      validateProject({
+        ...p,
+        pages: [{ ...p.pages[0], videos: [{ ...p.pages[0].videos[0], collapsed: 'true' }] }],
+      }),
+    ).toThrow();
   });
   it('rejects invalid coordinates and missing pages', () => {
     const p = valid();

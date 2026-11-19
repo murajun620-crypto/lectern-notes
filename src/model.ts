@@ -17,6 +17,7 @@ export type Video = {
   y: number;
   width: number;
   height: number;
+  collapsed?: boolean;
 };
 export type Page = {
   id: string;

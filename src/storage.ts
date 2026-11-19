@@ -144,6 +144,7 @@ export function validateProject(p: unknown): asserts p is Project {
         !v ||
         typeof v.id !== 'string' ||
         !/^[\w-]{11}$/.test(v.videoId) ||
+        (v.collapsed !== undefined && typeof v.collapsed !== 'boolean') ||
         !finite(v.x, videoBounds.left, videoBounds.right) ||
         !finite(v.y, videoBounds.top, videoBounds.bottom) ||
         !finite(v.width, 1, pg.width) ||

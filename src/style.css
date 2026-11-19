@@ -1959,7 +1959,28 @@ body,
   margin-left: 0;
 }
 .video-handle {
-  min-width: 110px;
+  min-width: 136px;
+}
+.video-box.collapsed {
+  background: transparent;
+  box-shadow: none;
+  outline: none;
+}
+.video-box.collapsed .video-thumbnail {
+  background: transparent;
+  border-radius: 50%;
+}
+.video-box.collapsed .play-badge {
+  background: white;
+  color: #27312f;
+  border: 1px solid #27312f4d;
+  box-shadow: 0 1px 4px #0002;
+}
+.video-box.collapsed .video-handle {
+  min-width: 80px;
+}
+.video-resize[hidden] {
+  display: none;
 }
 .library-header-end {
   display: flex;
