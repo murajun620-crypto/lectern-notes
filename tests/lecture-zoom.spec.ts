@@ -379,6 +379,7 @@ test.describe('high-DPI PDF detail rendering', () => {
       live.evaluate(
         (c: HTMLCanvasElement, at) => {
           const r = c.getBoundingClientRect();
+          if (!r.width || !r.height) return 0;
           const px = Math.round(((at.x - r.left) * c.width) / r.width);
           const py = Math.round(((at.y - r.top) * c.height) / r.height);
           return c.getContext('2d')!.getImageData(px, py, 1, 1).data[3];
@@ -411,7 +412,7 @@ test.describe('high-DPI PDF detail rendering', () => {
     await page.getByRole('button', { name: '移動', exact: true }).click();
     await page.mouse.move(x, y);
     await page.mouse.down();
-    await page.mouse.move(x + 38, y + 22, { steps: 5 });
+    await page.mouse.move(x + 38, y + 22);
     await expect(stage).toHaveAttribute('data-ink-preview', 'live');
     const panDensity = await live.evaluate(
       (c: HTMLCanvasElement) => c.width / c.getBoundingClientRect().width,
