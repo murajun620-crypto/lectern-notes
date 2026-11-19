@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import type { Page } from '@playwright/test';
+import { readFile } from 'node:fs/promises';
 
 async function demo(page: Page) {
   await page.goto('/');
@@ -292,6 +293,80 @@ test('Pencil writes in hand mode, a resting palm stays blocked, and two-finger t
 
 test.describe('Pencil contact samples', () => {
   test.use({ viewport: { width: 1024, height: 768 }, deviceScaleFactor: 2 });
+
+  test('exports Pencil events and committed samples only for the recorded interval', async ({
+    page,
+  }) => {
+    await demo(page);
+    const stage = page.getByTestId('stage');
+    await stage.evaluate(() => {
+      HTMLElement.prototype.setPointerCapture = () => {};
+    });
+    const paper = (await page.getByTestId('pdf-page').boundingBox())!;
+    const x = paper.x + paper.width / 2;
+    const y = paper.y + paper.height / 2;
+    await pointer(page, 'pointerdown', 41, 'pen', x, y);
+    await pointer(page, 'pointermove', 41, 'pen', x + 4, y);
+    await pointer(page, 'pointerup', 41, 'pen', x + 4, y);
+    await page.getByLabel('入力設定', { exact: true }).click();
+    await page.getByRole('button', { name: 'Pencil入力を記録', exact: true }).click();
+    await stage.evaluate(
+      (el, { x, y }) => {
+        const pen = (type: string, dx: number) =>
+          el.dispatchEvent(
+            new PointerEvent(type, {
+              bubbles: true,
+              pointerType: 'pen',
+              pointerId: 42,
+              clientX: x + dx,
+              clientY: y,
+              button: 0,
+              buttons: type === 'pointerdown' ? 1 : 0,
+            }),
+          );
+        const touch = (type: string, dx: number) => {
+          const event = new Event(type, { bubbles: true });
+          const contact = {
+            identifier: 42,
+            clientX: x + dx,
+            clientY: y,
+            touchType: 'stylus',
+            force: 0,
+          };
+          Object.defineProperties(event, {
+            changedTouches: { value: [contact] },
+            touches: { value: type === 'touchstart' ? [contact] : [] },
+          });
+          el.dispatchEvent(event);
+        };
+        pen('pointerdown', 0);
+        touch('touchstart', 0);
+        touch('touchend', 6);
+        pen('pointerup', 35);
+      },
+      { x, y: y + 30 },
+    );
+    await page.getByLabel('入力設定', { exact: true }).click();
+    const download = page.waitForEvent('download');
+    await page.getByRole('button', { name: '記録を終了して書き出す', exact: true }).click();
+    const file = await download;
+    expect(file.suggestedFilename()).toBe('lectern-pencil-diagnostics.json');
+    const report = JSON.parse(await readFile(await file.path(), 'utf8'));
+    expect(report.omitted).toBe(0);
+    expect(report.events).toMatchObject([
+      { type: 'pointerdown', id: 42, dx: 0, dy: 0 },
+      { type: 'touchstart', id: 42, dx: 0, dy: 0 },
+      { type: 'touchend', id: 42, dx: 6, dy: 0 },
+      { type: 'pointerup', id: 42, dx: 35, dy: 0 },
+      {
+        type: 'strokeFinished',
+        pointerId: 42,
+        touchId: 42,
+        pointCount: 2,
+        recoveredEndpoint: true,
+      },
+    ]);
+  });
 
   test('holds the initial dot and recovers short Pencil marks from nearby native endpoints', async ({
     page,

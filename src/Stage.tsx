@@ -8,6 +8,7 @@ import VideoBox from './VideoBox';
 import type { RegisterPlayback } from './VideoBox';
 import { effectiveTool, PalmGuard } from './input';
 import type { InkPriority, PencilTool } from './input';
+import type { PencilDiagnostics } from './pencil-diagnostics';
 import { clampPageZoom, usePageViewport } from './usePageViewport';
 import type { PageView } from './usePageViewport';
 import { panVelocity, recordPan } from './touch-momentum';
@@ -80,6 +81,7 @@ type Props = {
   zoom: number;
   inkClipboard: Stroke[];
   inkPriority: InkPriority;
+  pencilDiagnostics: PencilDiagnostics | null;
   onCopyInk: (strokes: Stroke[]) => void;
   setZoom: (z: number) => void;
   onChange: (pageId: string, edit: (previous: Page) => Page) => void;
@@ -108,6 +110,7 @@ export default function Stage({
   zoom,
   inkClipboard,
   inkPriority,
+  pencilDiagnostics,
   onCopyInk,
   setZoom,
   onChange,
@@ -401,6 +404,10 @@ export default function Stage({
     setLasso([]);
     setPasteAnchor(null);
   }, [tool]);
+  useEffect(() => {
+    const stage = viewport.current;
+    if (stage && pencilDiagnostics) return pencilDiagnostics.attach(stage);
+  }, [pencilDiagnostics]);
   useEffect(() => {
     let cancelled = false;
     const abort = new AbortController();
@@ -863,7 +870,14 @@ export default function Stage({
     gesture.current = null;
     if (g.pencil) {
       const { touchId, pointerId, shortTouchEnd } = g.pencil;
-      if (shortTouchEnd && g.points.length === 1) g.points.push(shortTouchEnd);
+      const recoveredEndpoint = !!shortTouchEnd && g.points.length === 1;
+      if (recoveredEndpoint) g.points.push(shortTouchEnd);
+      pencilDiagnostics?.finishStroke({
+        pointerId,
+        touchId,
+        pointCount: g.points.length,
+        recoveredEndpoint,
+      });
       const now = performance.now();
       if (pointerId !== undefined) palm.current.penUp(pointerId, now);
       if (touchId !== undefined && stylusContact.current === touchId) {

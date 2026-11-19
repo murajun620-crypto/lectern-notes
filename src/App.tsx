@@ -59,6 +59,8 @@ import {
 } from './input';
 import type { PencilTool } from './input';
 import { createInkControlGuard } from './ink-control-guard';
+import { createPencilDiagnostics } from './pencil-diagnostics';
+import type { PencilDiagnostics } from './pencil-diagnostics';
 import { initialVideoRect } from './video-layout';
 import { PlaybackButtons } from './VideoBox';
 import type { PlaybackActions, RegisterPlayback } from './VideoBox';
@@ -225,6 +227,7 @@ export default function App() {
     [initialized, setInitialized] = useState(false);
   const [inkClipboard, setInkClipboard] = useState<Stroke[]>([]);
   const [inkPriority] = useState(createInkPriority);
+  const [pencilDiagnostics, setPencilDiagnostics] = useState<PencilDiagnostics | null>(null);
   const [inkControlGuard] = useState(() => createInkControlGuard(inkPriority));
   const [tool, setTool] = useState<Tool>('pen'),
     [colorChoices, setColorChoices] = useState<Record<WritingTool, number | string>>({
@@ -1209,6 +1212,31 @@ export default function App() {
                 <small>
                   オフにすると、ページ送りと表示倍率は上部の「ページ・表示」から操作できます。
                 </small>
+                <button
+                  type="button"
+                  className="text-button"
+                  onClick={(e) => {
+                    if (pencilDiagnostics) {
+                      download(
+                        new Blob([pencilDiagnostics.report()], { type: 'application/json' }),
+                        'lectern-pencil-diagnostics.json',
+                      );
+                      setPencilDiagnostics(null);
+                    } else {
+                      setTool('pen');
+                      setPencilDiagnostics(createPencilDiagnostics());
+                      const menu = e.currentTarget.closest('details');
+                      if (menu) menu.open = false;
+                    }
+                  }}
+                >
+                  {pencilDiagnostics ? '記録を終了して書き出す' : 'Pencil入力を記録'}
+                </button>
+                <small>
+                  {pencilDiagnostics
+                    ? '記録中です。症状が出たら、このメニューから書き出せます。'
+                    : '筆記の抜けを調べるため、Pencilの相対位置と入力時刻を端末内だけで記録します。'}
+                </small>
                 <div className="preset-settings">
                   {Object.values(inkPalettes).map(({ label, preference }) => (
                     <div key={preference} className="preset-palette">
@@ -1371,6 +1399,7 @@ export default function App() {
                   setZoom={setZoom}
                   inkClipboard={inkClipboard}
                   inkPriority={inkPriority}
+                  pencilDiagnostics={pencilDiagnostics}
                   onCopyInk={setInkClipboard}
                   onChange={changePage}
                   onNavigate={navigate}
