@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 import {
   ArrowLeft,
@@ -118,35 +118,49 @@ function Modal({
     </dialog>
   );
 }
-function Thumbnail({ page }: { page: Page }) {
+const Thumbnail = memo(function Thumbnail({ page }: { page: Page }) {
   const ref = useRef<HTMLCanvasElement>(null);
+  const [background, setBackground] = useState<HTMLCanvasElement | null>(null);
+  const { width, height, sourcePage, assetId, strokes } = page;
+  const scale = 160 / width;
   useEffect(() => {
-    let cancel = false;
+    const abort = new AbortController();
     const canvas = ref.current!;
+    setBackground(null);
     const observer = new IntersectionObserver((entries) => {
       if (!entries[0].isIntersecting) return;
       observer.disconnect();
       const temp = document.createElement('canvas');
-      void renderPage(page, temp, 160 / page.width)
+      void renderPage({ width, height, sourcePage, assetId }, temp, scale, abort.signal)
         .then(() => {
-          if (cancel) return;
-          canvas.width = temp.width;
-          canvas.height = temp.height;
-          const ctx = canvas.getContext('2d')!;
-          ctx.drawImage(temp, 0, 0);
-          ctx.scale(160 / page.width, 160 / page.width);
-          drawStrokes(ctx, page.strokes);
+          if (!abort.signal.aborted) setBackground(temp);
         })
         .catch(() => {});
     });
     observer.observe(canvas);
     return () => {
-      cancel = true;
+      abort.abort();
       observer.disconnect();
     };
-  }, [page]);
+  }, [width, height, sourcePage, assetId, scale]);
+  useEffect(() => {
+    const canvas = ref.current!;
+    if (!background) return;
+    const frame = requestAnimationFrame(() => {
+      if (canvas.width !== background.width) canvas.width = background.width;
+      if (canvas.height !== background.height) canvas.height = background.height;
+      const ctx = canvas.getContext('2d')!;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(background, 0, 0);
+      ctx.save();
+      ctx.scale(scale, scale);
+      drawStrokes(ctx, strokes);
+      ctx.restore();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [background, scale, strokes]);
   return <canvas ref={ref} style={{ aspectRatio: `${page.width}/${page.height}` }} />;
-}
+});
 const tools: { id: Tool; label: string; icon: ReactNode; key: string }[] = [
   { id: 'hand', label: '移動', icon: <Hand />, key: 'H' },
   { id: 'pen', label: 'ペン', icon: <PenLine />, key: 'P' },
@@ -265,8 +279,7 @@ export default function App() {
     [saved, setSaved] = useState(true),
     [query, setQuery] = useState(''),
     [jump, setJump] = useState('1');
-  const [revision, setRevision] = useState(0),
-    [videoUrl, setVideoUrl] = useState(''),
+  const [videoUrl, setVideoUrl] = useState(''),
     [videoError, setVideoError] = useState('');
   const input = useRef<HTMLInputElement>(null),
     backupInput = useRef<HTMLInputElement>(null),
@@ -336,7 +349,6 @@ export default function App() {
     if (h.undo.length > 60) h.undo.shift();
     h.redo = [];
     history.current.set(next.id, h);
-    setRevision((r) => r + 1);
     setProject({
       ...p,
       updatedAt: Date.now(),
@@ -373,7 +385,6 @@ export default function App() {
       updatedAt: Date.now(),
       pages: p.pages.map((item) => (item.id === pg.id ? next : item)),
     });
-    setRevision((r) => r + 1);
   }, []);
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -537,7 +548,6 @@ export default function App() {
     setTool('hand');
   };
   const h = page ? history.current.get(page.id) : undefined;
-  void revision;
   const toggleLecture = () => {
     setLecture((l) => !l);
     setTool('pen');

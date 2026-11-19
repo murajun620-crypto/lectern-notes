@@ -1,10 +1,10 @@
-import { useEffect, useLayoutEffect, useRef } from 'react';
+import { memo, useEffect, useLayoutEffect, useRef } from 'react';
 import type { Page } from './model';
 import { drawStrokes } from './model';
 import { renderPage } from './pdf';
 
 /** Reuse the same page-space rendering for neighbors while the focused page stays interactive. */
-export default function PageStackPreview({
+export default memo(function PageStackPreview({
   page,
   fit,
   active,
@@ -39,13 +39,18 @@ export default function PageStackPreview({
 
   useLayoutEffect(() => {
     const canvas = ink.current!;
+    if (active) {
+      if (canvas.width !== 1) canvas.width = 1;
+      if (canvas.height !== 1) canvas.height = 1;
+      return;
+    }
     canvas.width = strokes.length ? Math.max(1, Math.round(width * scale)) : 1;
     canvas.height = strokes.length ? Math.max(1, Math.round(height * scale)) : 1;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     ctx.scale(scale, scale);
     drawStrokes(ctx, strokes);
-  }, [id, width, height, scale, strokes]);
+  }, [id, width, height, scale, strokes, active]);
 
   return (
     <>
@@ -53,4 +58,4 @@ export default function PageStackPreview({
       <canvas ref={ink} className="stack-ink-canvas" hidden={active} />
     </>
   );
-}
+});

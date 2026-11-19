@@ -289,6 +289,99 @@ test('Pencil writes in hand mode, a resting palm stays blocked, and two-finger t
   await expect(page.getByLabel('ページ番号')).toHaveValue('2');
 });
 
+test('light Pencil strokes stay continuous and ink history updates without repainting the whole page', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1024, height: 768 });
+  await demo(page);
+  await page.evaluate(async () => {
+    const db = await new Promise<IDBDatabase>((resolve) => {
+      const request = indexedDB.open('lectern', 1);
+      request.onsuccess = () => resolve(request.result);
+    });
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction('projects', 'readwrite');
+      const store = tx.objectStore('projects');
+      const request = store.getAll();
+      request.onsuccess = () => {
+        const project = request.result[0];
+        project.pages[0].strokes = Array.from({ length: 120 }, (_, i) => ({
+          id: `sample-${i}`,
+          tool: 'pen',
+          color: '#183e3a',
+          width: 2.5,
+          points: [{ x: 160 + (i % 20) * 12, y: 280 + Math.floor(i / 20) * 12, p: 0.5 }],
+        }));
+        store.put(project);
+      };
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+    db.close();
+  });
+  await page.reload();
+  await page.getByLabel('表示倍率').selectOption('2');
+  const detail = page.locator('.pdf-detail-layer canvas');
+  await expect(detail).toBeVisible();
+  const ink = page.getByTestId('ink-canvas');
+  await expect(ink).toBeVisible();
+  await detail.evaluate((canvas) => canvas.setAttribute('data-test-original', ''));
+  await page.evaluate(() => {
+    HTMLElement.prototype.setPointerCapture = () => {};
+    const fill = CanvasRenderingContext2D.prototype.fill;
+    CanvasRenderingContext2D.prototype.fill = function (...args: unknown[]) {
+      if (this.canvas.classList.contains('ink-canvas'))
+        this.canvas.dataset.fillCount = String(Number(this.canvas.dataset.fillCount ?? 0) + 1);
+      Reflect.apply(fill, this, args);
+    };
+    const stage = document.querySelector('[data-testid="stage"]')!;
+    const rect = document.querySelector('[data-testid="pdf-page"]')!.getBoundingClientRect();
+    for (let i = 0; i <= 36; i++) {
+      stage.dispatchEvent(
+        new PointerEvent(i === 0 ? 'pointerdown' : 'pointermove', {
+          bubbles: true,
+          pointerType: 'pen',
+          pointerId: 31,
+          isPrimary: true,
+          buttons: 1,
+          clientX: rect.x + rect.width * (0.33 + 0.33 * (i / 36)),
+          clientY: rect.y + rect.height * 0.62,
+          pressure: i % 2 ? 0.015 : 0.001,
+        }),
+      );
+    }
+  });
+  const coverage = (selector: string) =>
+    page.locator(selector).evaluate((canvas: HTMLCanvasElement) => {
+      const paper = document.querySelector('[data-testid="pdf-page"]')!.getBoundingClientRect();
+      const box = canvas.getBoundingClientRect();
+      const start = Math.round(((paper.x + paper.width * 0.36 - box.x) * canvas.width) / box.width);
+      const end = Math.round(((paper.x + paper.width * 0.63 - box.x) * canvas.width) / box.width);
+      const y = Math.floor(((paper.y + paper.height * 0.62 - box.y) * canvas.height) / box.height);
+      const pixels = canvas.getContext('2d')!.getImageData(start, y - 2, end - start, 5).data;
+      let gaps = 0;
+      for (let x = 0; x < end - start; x++)
+        if ([0, 1, 2, 3, 4].every((dy) => pixels[(dy * (end - start) + x) * 4 + 3] < 40)) gaps++;
+      return { gaps, width: end - start };
+    });
+  await expect.poll(async () => (await coverage('.ink-draft-canvas')).gaps).toBe(0);
+  await expect(ink).not.toHaveAttribute('data-fill-count');
+
+  // A system cancellation can end Pencil contact before a pointerup arrives.
+  await pointer(page, 'pointercancel', 31, 'pen', 0, 0);
+  await expect.poll(async () => (await coverage('.ink-canvas')).gaps).toBe(0);
+  await expect(ink).toHaveAttribute('data-fill-count', '1');
+  await page.getByRole('button', { name: '元に戻す', exact: true }).click();
+  const undone = await coverage('.ink-canvas');
+  expect(undone.gaps).toBe(undone.width);
+  await expect(ink).toHaveAttribute('data-fill-count', '1');
+  await page.getByRole('button', { name: 'やり直す', exact: true }).click();
+  expect((await coverage('.ink-canvas')).gaps).toBe(0);
+  await expect(ink).toHaveAttribute('data-fill-count', '2');
+  await expect(detail).toHaveAttribute('data-test-original');
+  await expect.poll(async () => (await stored(page))[0].pages[0].strokes.length).toBe(121);
+});
+
 test('Safari touch fallback flips pages while zoomed and never double-turns a Pointer gesture', async ({
   page,
 }) => {

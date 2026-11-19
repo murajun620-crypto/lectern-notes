@@ -110,18 +110,45 @@ export function pointErased(stroke: Stroke, p: Point) {
     ) ?? false
   );
 }
-export function penOutline(stroke: Stroke, draft = false) {
+export function penOutline(stroke: Stroke) {
   return getStroke(
-    stroke.points.map((p) => [p.x, p.y, p.p]),
+    stroke.points.map((p) => [p.x, p.y, Math.max(0.32, p.p)]),
     {
       size: stroke.width,
       thinning: 0.55,
       smoothing: 0.65,
       streamline: 0.2,
       simulatePressure: false,
-      last: !draft,
+      last: true,
     },
   );
+}
+
+type InkBounds = { left: number; top: number; right: number; bottom: number };
+const savedInkBounds = new WeakMap<Stroke, InkBounds>();
+export function strokeBounds(stroke: Stroke, draft = false): InkBounds {
+  const cached = draft ? undefined : savedInkBounds.get(stroke);
+  if (cached) return cached;
+  let left = Infinity,
+    top = Infinity,
+    right = -Infinity,
+    bottom = -Infinity;
+  for (const { x, y } of stroke.points) {
+    left = Math.min(left, x);
+    top = Math.min(top, y);
+    right = Math.max(right, x);
+    bottom = Math.max(bottom, y);
+  }
+  // Include the outline's end caps and perfect-freehand's synthetic points for single taps.
+  const padding = stroke.width * 2 + 2;
+  const bounds = {
+    left: left - padding,
+    top: top - padding,
+    right: right + padding,
+    bottom: bottom + padding,
+  };
+  if (!draft) savedInkBounds.set(stroke, bounds);
+  return bounds;
 }
 export function traceCurve(
   ctx: Pick<CanvasRenderingContext2D, 'moveTo' | 'quadraticCurveTo' | 'lineTo'>,
@@ -204,7 +231,7 @@ function strokePath(stroke: Stroke, draft: boolean) {
     traceCurve(path, stroke.points);
     if (stroke.points.length === 1) path.lineTo(stroke.points[0].x + 0.01, stroke.points[0].y);
   } else {
-    const outline = penOutline(stroke, draft);
+    const outline = penOutline(stroke);
     if (outline.length) {
       const first = outline[0],
         last = outline.at(-1)!;

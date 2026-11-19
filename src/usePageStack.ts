@@ -21,7 +21,11 @@ export function usePageStack(
     () => (pages ? buildPageStack(pages, size, fitWidth) : []),
     [pages, size, fitWidth],
   );
+  const currentStack = useRef(stack);
+  currentStack.current = stack;
   const active = stack.find((item) => item.page.id === page.id);
+  const activeId = active?.page.id;
+  const activeCenter = active?.center;
   const fit = active?.fit ?? pageFit(page, size, fitWidth);
   const contentBounds = pageContentBounds(page);
   if (active) {
@@ -36,24 +40,25 @@ export function usePageStack(
   const lastRange = useRef(range);
   const focus = useCallback(
     (target: StackPage, view: PageView) => {
-      if (!active || target.page.id === active.page.id) return;
+      if (activeCenter === undefined || target.page.id === activeId) return;
       carried.current = {
         id: target.page.id,
-        pan: { x: view.pan.x, y: view.pan.y + (target.center - active.center) * view.zoom },
+        pan: { x: view.pan.x, y: view.pan.y + (target.center - activeCenter) * view.zoom },
       };
       onFocusPage(target.page.id);
     },
-    [active, onFocusPage],
+    [activeCenter, activeId, onFocusPage],
   );
 
   const paintStack = useCallback(
     (view: PageView) => {
-      if (!active) return;
+      if (activeCenter === undefined) return;
       const transform = `translate3d(${view.pan.x}px, ${view.pan.y}px, 0) scale(${view.zoom})`;
       if (paperLayer.current) paperLayer.current.style.transform = transform;
       if (videoLayer.current) videoLayer.current.style.transform = transform;
 
-      const center = active.center - view.pan.y / view.zoom;
+      const stack = currentStack.current;
+      const center = activeCenter - view.pan.y / view.zoom;
       // Include the next page on either side, so dragging can expose it immediately.
       const reach = size.h / (2 * view.zoom);
       const first = Math.max(0, stackIndexAt(stack, center - reach) - 1);
@@ -63,13 +68,14 @@ export function usePageStack(
         setRange(lastRange.current);
       }
     },
-    [active, size.h, stack],
+    [activeCenter, size.h],
   );
   const settleStack = useCallback(
     (view: PageView) => {
-      if (active) focus(stackPageAt(stack, active.center - view.pan.y / view.zoom), view);
+      if (activeCenter !== undefined)
+        focus(stackPageAt(currentStack.current, activeCenter - view.pan.y / view.zoom), view);
     },
-    [active, focus, stack],
+    [activeCenter, focus],
   );
   const takePagePan = useCallback((id: string) => {
     const next = carried.current;

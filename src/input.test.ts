@@ -104,12 +104,13 @@ describe('smooth pressure-bearing stroke outline', () => {
       expect(points.flat().every(Number.isFinite)).toBe(true);
     }
   });
-  it('uses real pressure to vary width', () => {
+  it('keeps very light pressure visible and still varies width with pressure', () => {
     const extent = (p: number) => {
       const outline = penOutline({ ...stroke, points: stroke.points.map((pt) => ({ ...pt, p })) });
       const ys = outline.map((pt) => pt[1]);
       return Math.max(...ys) - Math.min(...ys);
     };
+    expect(extent(0.001)).toBeGreaterThan(stroke.width * 0.72);
     expect(extent(0.85)).toBeGreaterThan(extent(0.1));
   });
 });

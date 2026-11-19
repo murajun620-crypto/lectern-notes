@@ -73,7 +73,6 @@ export default function Stage({
     [loading, setLoading] = useState(true);
   const [selection, setSelection] = useState<string[]>([]),
     [lasso, setLasso] = useState<Point[]>([]),
-    [draft, setDraft] = useState<Stroke | null>(null),
     [working, setWorking] = useState<Stroke[] | null>(null);
   const pageRef = useRef(page);
   pageRef.current = page;
@@ -121,7 +120,6 @@ export default function Stage({
     cancelled: boolean;
   } | null>(null);
   const lasers = useRef<{ x: number; y: number; t: number }[]>([]);
-  const draftFrame = useRef<number | null>(null);
   const showInkPreview = useCallback(() => {
     const stage = viewport.current;
     if (stage && !stage.hasAttribute('data-ink-preview'))
@@ -159,7 +157,15 @@ export default function Stage({
     settleStack,
     takePagePan,
   });
-  const { inkCanvas, draftCanvas, inkPreview, previewErasure, finishErasure } = useInkLayer({
+  const {
+    inkCanvas,
+    draftCanvas,
+    inkPreview,
+    previewStroke,
+    clearDraft,
+    previewErasure,
+    finishErasure,
+  } = useInkLayer({
     page,
     viewport,
     size,
@@ -168,7 +174,6 @@ export default function Stage({
     pan,
     settled,
     interacting,
-    draft,
     working,
     selection,
     lasso,
@@ -176,19 +181,11 @@ export default function Stage({
     center: stack.active?.center ?? 0,
   });
   const clearInkGesture = useCallback(() => {
-    if (draftFrame.current !== null) cancelAnimationFrame(draftFrame.current);
-    draftFrame.current = null;
+    clearDraft();
     finishErasure();
-    setDraft(null);
     setWorking(null);
     setLasso([]);
-  }, [finishErasure]);
-  useEffect(
-    () => () => {
-      if (draftFrame.current !== null) cancelAnimationFrame(draftFrame.current);
-    },
-    [],
-  );
+  }, [clearDraft, finishErasure]);
   const screenScale = () => fit * view.current.zoom;
   const hideEraser = () => {
     if (eraserCursor.current) eraserCursor.current.style.display = 'none';
@@ -214,7 +211,11 @@ export default function Stage({
   }, [tool, eraserWidth, page.id]);
   useLayoutEffect(() => {
     const el = viewport.current!;
-    const ro = new ResizeObserver(() => setSize({ w: el.clientWidth, h: el.clientHeight }));
+    const ro = new ResizeObserver(() => {
+      const w = el.clientWidth,
+        h = el.clientHeight;
+      setSize((current) => (current.w === w && current.h === h ? current : { w, h }));
+    });
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
@@ -406,7 +407,7 @@ export default function Stage({
     return {
       x: ((e.clientX - r.left) / r.width) * page.width,
       y: ((e.clientY - r.top) / r.height) * page.height,
-      p: e.pointerType === 'pen' && e.pressure && e.pressure > 0 ? e.pressure : 0.5,
+      p: e.pointerType === 'pen' ? (e.pressure ?? 0.5) : 0.5,
     };
   };
   const appendSamples = (e: ReactPointerEvent, points: Point[]) => {
@@ -519,10 +520,10 @@ export default function Stage({
         tool: selectedTool as 'pen' | 'highlighter',
         color,
         width,
-        points: [p],
+        points: gesture.current.points,
       };
       gesture.current.stroke = s;
-      setDraft(s);
+      previewStroke(s);
     }
     if (kind === 'erase') {
       gesture.current.erasure = { id: uid(), width: eraserWidth / screenScale() };
@@ -596,12 +597,7 @@ export default function Stage({
     if (g.kind === 'draw') {
       const before = g.points.length;
       appendSamples(e, g.points);
-      if (g.points.length > before && draftFrame.current === null) {
-        draftFrame.current = requestAnimationFrame(() => {
-          draftFrame.current = null;
-          if (gesture.current === g) setDraft({ ...g.stroke!, points: [...g.points] });
-        });
-      }
+      if (g.points.length > before) previewStroke(g.stroke!);
     }
     if (g.kind === 'erase') {
       appendSamples(e, g.points);
@@ -648,17 +644,19 @@ export default function Stage({
     if (!g || g.id !== e.pointerId) return;
     gesture.current = null;
     if (g.kind === 'pan') commitView();
-    if (!cancel) {
-      if (g.kind === 'draw') {
+    if (g.kind === 'draw' && (!cancel || (g.pointerType === 'pen' && g.points.length > 1))) {
+      if (!cancel) {
         const p = point(e);
         const last = g.points.at(-1)!;
         if (Math.hypot(p.x - last.x, p.y - last.y) > 0.25 / screenScale())
           g.points.push({ ...p, p: e.pressure > 0 ? p.p : last.p });
-        onChange({
-          ...pageRef.current,
-          strokes: [...g.original, { ...g.stroke!, points: g.points }],
-        });
       }
+      onChange({
+        ...pageRef.current,
+        strokes: [...pageRef.current.strokes, g.stroke!],
+      });
+    }
+    if (!cancel) {
       // Commit event-time data, never React's potentially deferred pointermove render.
       if (g.kind === 'move') {
         const p = point(e),
