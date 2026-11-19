@@ -1915,6 +1915,19 @@ body,
   max-height: calc(var(--app-height, 100dvh) - 180px);
   overflow: auto;
 }
+@media (max-width: 740px) {
+  .toolbar {
+    position: relative;
+  }
+  .settings-menu {
+    position: static;
+  }
+  .settings-dropdown {
+    right: 8px;
+    top: calc(100% + 4px);
+    max-width: calc(100vw - 16px);
+  }
+}
 .preset-settings {
   margin: 15px 0;
   padding: 13px 0;
