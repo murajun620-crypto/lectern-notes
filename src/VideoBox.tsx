@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Play,
   X,
@@ -44,8 +45,15 @@ export function PlaybackButtons({ actions }: { actions: PlaybackActions }) {
           {enlarged ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
         </button>
       )}
-      <button type="button" title="動画を閉じる" onClick={close}>
+      <button
+        type="button"
+        className="video-close"
+        title="動画を閉じる"
+        aria-label="動画を閉じる"
+        onClick={close}
+      >
         <X size={18} />
+        閉じる
       </button>
     </>
   );
@@ -102,8 +110,13 @@ export default function VideoBox({
   video: v,
   page,
   selected,
+  playing,
+  playbackKey,
+  controls,
   onSelect,
   onDeselect,
+  onPlay,
+  onClosePlayback,
   registerPlayback,
   pageScale,
   displayZoom = 1,
@@ -114,8 +127,13 @@ export default function VideoBox({
   video: Video;
   page: Page;
   selected: boolean;
+  playing: boolean;
+  playbackKey: string;
+  controls: HTMLDivElement | null;
   onSelect: () => void;
   onDeselect: () => void;
+  onPlay: () => void;
+  onClosePlayback: (key: string) => void;
   registerPlayback: RegisterPlayback;
   pageScale: number;
   displayZoom?: number;
@@ -123,12 +141,12 @@ export default function VideoBox({
   onChange: (v: Video) => void;
   onDelete: () => void;
 }) {
-  const [playing, setPlaying] = useState(false),
-    [enlarged, setEnlarged] = useState(false),
+  const [enlarged, setEnlarged] = useState(false),
     [error, setError] = useState(''),
     [blocked, setBlocked] = useState(false),
     [playbackState, setPlaybackState] = useState(-1);
-  const host = useRef<HTMLDivElement>(null),
+  const box = useRef<HTMLDivElement>(null),
+    host = useRef<HTMLDivElement>(null),
     player = useRef<Player | undefined>(undefined);
   const drag = useRef<{
     x: number;
@@ -150,43 +168,58 @@ export default function VideoBox({
       : placement;
   const canResize = (enlarged || larger.width > v.width + 0.01) && !error;
   const toggleSize = useCallback(() => setEnlarged((value) => !value), []);
-  const close = useCallback(() => {
-    setPlaying(false);
-    setEnlarged(false);
-    setPlaybackState(-1);
-  }, []);
-  const playbackKey = `${page.id}:${v.id}`;
-  useEffect(() => {
-    if (!playing) return;
-    registerPlayback(playbackKey, { enlarged, canResize, toggleSize, close });
-    return () => registerPlayback(playbackKey, null);
-  }, [playing, playbackKey, enlarged, canResize, toggleSize, close, registerPlayback]);
+  const close = useCallback(() => onClosePlayback(playbackKey), [playbackKey, onClosePlayback]);
   const compact = shown.width * scale < 180;
   const align =
     shown.x + shown.width / 2 > (visibleBounds.left + visibleBounds.right) / 2 ? 'right' : 'left';
   const statusAbove = shown.y - visibleBounds.top > visibleBounds.bottom - shown.y - shown.height;
-  const editWidth = collapsed ? 84 : 136;
-  const editHeight = 28;
-  const left = shown.x * scale;
-  const top = shown.y * scale;
-  const right = (shown.x + shown.width) * scale;
-  const bottom = (shown.y + shown.height) * scale;
-  const menuX = clamp(
-    align === 'right' ? right - editWidth : left,
-    visibleBounds.left * scale + 4,
-    Math.max(visibleBounds.left * scale + 4, visibleBounds.right * scale - editWidth - 4),
+  const editWidth = collapsed ? 108 : 176;
+  const editHeight = 36;
+  const screenWidth = (visibleBounds.right - visibleBounds.left) * scale;
+  const screenHeight = (visibleBounds.bottom - visibleBounds.top) * scale;
+  const left = (shown.x - visibleBounds.left) * scale;
+  const top = (shown.y - visibleBounds.top) * scale;
+  const right = left + shown.width * scale;
+  const bottom = top + shown.height * scale;
+  const onScreen = right > 0 && left < screenWidth && bottom > 0 && top < screenHeight;
+  const alignX = (width: number) =>
+    Math.round(
+      clamp(align === 'right' ? right - width : left, 4, Math.max(4, screenWidth - width - 4)),
+    );
+  const menuY = Math.round(
+    clamp(
+      top >= editHeight + 8 ? top - editHeight - 4 : bottom + 4,
+      4,
+      Math.max(4, screenHeight - editHeight - 4),
+    ),
   );
-  const menuY = clamp(
-    top - visibleBounds.top * scale >= editHeight + 8 ? top - editHeight - 4 : bottom + 4,
-    visibleBounds.top * scale + 4,
-    Math.max(visibleBounds.top * scale + 4, visibleBounds.bottom * scale - editHeight - 4),
-  );
+  const playbackWidth = canResize ? 128 : 84;
+  const playbackHeight = 44;
+  const playbackY = top >= playbackHeight + 10 ? top - playbackHeight - 6 : bottom + 6;
+  const showLocalPlayback =
+    !!controls && onScreen && playbackY + playbackHeight <= screenHeight - 4;
+  useEffect(() => {
+    if (!playing || showLocalPlayback) return;
+    registerPlayback(playbackKey, { enlarged, canResize, toggleSize, close });
+    return () => registerPlayback(playbackKey, null);
+  }, [
+    playing,
+    showLocalPlayback,
+    playbackKey,
+    enlarged,
+    canResize,
+    toggleSize,
+    close,
+    registerPlayback,
+  ]);
   const startPlayback = () => {
     onDeselect();
-    setPlaying(true);
+    setEnlarged(false);
+    setPlaybackState(-1);
+    onPlay();
   };
   const playSize =
-    Math.min(compact ? 29 : 44, shown.width * scale * 0.8, shown.height * scale * 0.8) /
+    Math.min(compact ? 29 : 44, shown.width * scale * 0.68, shown.height * scale * 0.68) /
     displayZoom;
   const badgeStyle = { width: playSize, height: playSize };
   const showPreview = (next: Video | null) => {
@@ -272,9 +305,10 @@ export default function VideoBox({
   }, [playing, v.videoId, close]);
   return (
     <div
+      ref={box}
       className={`video-box ${playing ? 'playing' : ''} ${selected ? 'selected' : ''} ${collapsed ? 'collapsed' : ''}`}
       data-testid="video-box"
-      data-player-state={playbackState}
+      data-player-state={playing ? playbackState : -1}
       style={{
         left: `${(shown.x / page.width) * 100}%`,
         top: `${(shown.y / page.height) * 100}%`,
@@ -346,127 +380,155 @@ export default function VideoBox({
           </button>
         </>
       )}
-      {selected && !playing && (
-        <>
+      {playing &&
+        showLocalPlayback &&
+        controls &&
+        createPortal(
           <div
-            className="video-handle"
+            className="video-playback-actions"
+            data-video-control=""
+            role="group"
+            aria-label="動画の再生操作"
             style={{
-              left: (menuX - left) / displayZoom,
-              top: (menuY - top) / displayZoom,
-              width: editWidth,
-              height: editHeight,
-              transform: `scale(${1 / displayZoom})`,
-            }}
-            onPointerDown={(e) => {
-              e.stopPropagation();
-              e.currentTarget.setPointerCapture(e.pointerId);
-              drag.current = {
-                x: e.clientX,
-                y: e.clientY,
-                video: v,
-                rect: e.currentTarget.closest('[data-video-paper]')!.getBoundingClientRect(),
-              };
-            }}
-            onPointerMove={(e) => {
-              const d = drag.current;
-              if (!d) return;
-              showPreview(
-                positionVideo(
-                  d.video,
-                  page,
-                  d.video.x + ((e.clientX - d.x) * page.width) / d.rect.width,
-                  d.video.y + ((e.clientY - d.y) * page.height) / d.rect.height,
-                ),
-              );
-            }}
-            onPointerUp={() => {
-              if (previewRef.current) onChange(previewRef.current);
-              showPreview(null);
-              drag.current = null;
-            }}
-            onPointerCancel={() => {
-              showPreview(null);
-              drag.current = null;
+              left: alignX(playbackWidth),
+              top: Math.round(playbackY),
+              width: playbackWidth,
             }}
           >
-            <span className="video-grip" title="動画を移動">
-              <GripHorizontal size={13} />
-            </span>
-            {!collapsed && (
-              <>
-                <button
-                  title={v.width >= v.height ? '動画を縦長にする' : '動画を横長にする'}
-                  onPointerDown={(e) => e.stopPropagation()}
-                  onClick={() => onChange(rotateVideo(v, page))}
-                >
-                  <RotateCw size={12} />
-                </button>
-                <button
-                  title="サムネイルを小さく"
-                  onPointerDown={(e) => e.stopPropagation()}
-                  onClick={() => onChange(resizeVideo(v, page, 0.7))}
-                >
-                  <Minus size={12} />
-                </button>
-              </>
-            )}
-            <button
-              type="button"
-              title={collapsed ? '折りたたみを解除' : '動画を折りたたむ'}
-              onPointerDown={(e) => e.stopPropagation()}
-              onClick={() => onChange({ ...v, collapsed: !v.collapsed })}
-            >
-              {collapsed ? <PanelTopOpen size={12} /> : <PanelTopClose size={12} />}
-            </button>
-            <button
-              title="動画を削除"
-              onPointerDown={(e) => e.stopPropagation()}
-              onClick={() => {
-                onDeselect();
-                onDelete();
+            <PlaybackButtons actions={{ enlarged, canResize, toggleSize, close }} />
+          </div>,
+          controls,
+        )}
+      {selected &&
+        !playing &&
+        onScreen &&
+        controls &&
+        createPortal(
+          <>
+            <div
+              className="video-handle"
+              data-video-control=""
+              style={{
+                left: alignX(editWidth),
+                top: menuY,
+                width: editWidth,
+                height: editHeight,
+              }}
+              onPointerDown={(e) => {
+                e.stopPropagation();
+                e.currentTarget.setPointerCapture(e.pointerId);
+                drag.current = {
+                  x: e.clientX,
+                  y: e.clientY,
+                  video: v,
+                  rect: box.current!.closest('[data-video-paper]')!.getBoundingClientRect(),
+                };
+              }}
+              onPointerMove={(e) => {
+                const d = drag.current;
+                if (!d) return;
+                showPreview(
+                  positionVideo(
+                    d.video,
+                    page,
+                    d.video.x + ((e.clientX - d.x) * page.width) / d.rect.width,
+                    d.video.y + ((e.clientY - d.y) * page.height) / d.rect.height,
+                  ),
+                );
+              }}
+              onPointerUp={() => {
+                if (previewRef.current) onChange(previewRef.current);
+                showPreview(null);
+                drag.current = null;
+              }}
+              onPointerCancel={() => {
+                showPreview(null);
+                drag.current = null;
               }}
             >
-              <Trash2 size={12} />
+              <span className="video-grip" title="動画を移動">
+                <GripHorizontal size={18} />
+              </span>
+              {!collapsed && (
+                <>
+                  <button
+                    title={v.width >= v.height ? '動画を縦長にする' : '動画を横長にする'}
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onClick={() => onChange(rotateVideo(v, page))}
+                  >
+                    <RotateCw size={17} />
+                  </button>
+                  <button
+                    title="サムネイルを小さく"
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onClick={() => onChange(resizeVideo(v, page, 0.7))}
+                  >
+                    <Minus size={17} />
+                  </button>
+                </>
+              )}
+              <button
+                type="button"
+                title={collapsed ? '折りたたみを解除' : '動画を折りたたむ'}
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={() => onChange({ ...v, collapsed: !v.collapsed })}
+              >
+                {collapsed ? <PanelTopOpen size={17} /> : <PanelTopClose size={17} />}
+              </button>
+              <button
+                title="動画を削除"
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={() => {
+                  onDeselect();
+                  onDelete();
+                }}
+              >
+                <Trash2 size={17} />
+              </button>
+            </div>
+            <button
+              className="video-resize"
+              data-video-control=""
+              style={{
+                left: Math.round(clamp(right - 28, 0, screenWidth - 28)),
+                top: Math.round(clamp(bottom - 28, 0, screenHeight - 28)),
+              }}
+              hidden={collapsed}
+              title="動画のサイズ変更"
+              onPointerDown={(e) => {
+                e.stopPropagation();
+                e.currentTarget.setPointerCapture(e.pointerId);
+                drag.current = {
+                  x: e.clientX,
+                  y: e.clientY,
+                  video: v,
+                  rect: box.current!.closest('[data-video-paper]')!.getBoundingClientRect(),
+                };
+              }}
+              onPointerMove={(e) => {
+                const d = drag.current;
+                if (!d) return;
+                const dx = ((e.clientX - d.x) * page.width) / d.rect.width;
+                const dy = ((e.clientY - d.y) * page.height) / d.rect.height;
+                const { width, height } = d.video;
+                const factor = 1 + (dx * width + dy * height) / (width ** 2 + height ** 2);
+                showPreview(resizeVideo(d.video, page, factor));
+              }}
+              onPointerUp={() => {
+                if (previewRef.current) onChange(previewRef.current);
+                showPreview(null);
+                drag.current = null;
+              }}
+              onPointerCancel={() => {
+                showPreview(null);
+                drag.current = null;
+              }}
+            >
+              <Maximize2 size={15} />
             </button>
-          </div>
-          <button
-            className="video-resize"
-            style={{ transform: `scale(${1 / displayZoom})` }}
-            hidden={collapsed}
-            title="動画のサイズ変更"
-            onPointerDown={(e) => {
-              e.stopPropagation();
-              e.currentTarget.setPointerCapture(e.pointerId);
-              drag.current = {
-                x: e.clientX,
-                y: e.clientY,
-                video: v,
-                rect: e.currentTarget.closest('[data-video-paper]')!.getBoundingClientRect(),
-              };
-            }}
-            onPointerMove={(e) => {
-              const d = drag.current;
-              if (!d) return;
-              const dx = ((e.clientX - d.x) * page.width) / d.rect.width;
-              const dy = ((e.clientY - d.y) * page.height) / d.rect.height;
-              const { width, height } = d.video;
-              const factor = 1 + (dx * width + dy * height) / (width ** 2 + height ** 2);
-              showPreview(resizeVideo(d.video, page, factor));
-            }}
-            onPointerUp={() => {
-              if (previewRef.current) onChange(previewRef.current);
-              showPreview(null);
-              drag.current = null;
-            }}
-            onPointerCancel={() => {
-              showPreview(null);
-              drag.current = null;
-            }}
-          >
-            <Maximize2 size={11} />
-          </button>
-        </>
-      )}
+          </>,
+          controls,
+        )}
     </div>
   );
 }

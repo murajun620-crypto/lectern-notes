@@ -254,10 +254,13 @@ test('video placement and inline player stay aligned after compositor zoom', asy
   await page
     .getByRole('button', { name: 'サムネイルを選択', exact: true })
     .click({ position: { x: 3, y: 3 } });
-  const ribbon = page.locator('.video-handle');
-  expect((await ribbon.boundingBox())!.height).toBeCloseTo(28, 0);
-  await page.getByLabel('表示倍率').selectOption('3');
-  expect((await ribbon.boundingBox())!.height).toBeCloseTo(28, 0);
+  const ribbon = page.locator('.stage-video-controls .video-handle');
+  expect((await ribbon.boundingBox())!.height).toBeCloseTo(36, 0);
+  await page.getByLabel('表示倍率').selectOption('10');
+  await expect(ribbon).toHaveCSS('transform', 'none');
+  await expect(ribbon.locator('svg').first()).toHaveCSS('width', '18px');
+  expect((await ribbon.boundingBox())!.height).toBeCloseTo(36, 0);
+  expect((await ribbon.boundingBox())!.x % 1).toBe(0);
   await page.getByLabel('表示倍率').selectOption('2');
   await page.getByRole('button', { name: '動画をページ内で再生' }).click();
   await expect(page.getByTitle('YouTube動画', { exact: true })).toBeVisible();
@@ -280,7 +283,10 @@ test('video placement and inline player stay aligned after compositor zoom', asy
   await expect(page.getByTitle('YouTube動画', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: '全画面表示を終了', exact: true }).click();
   expect(await page.evaluate(() => (window as any).__playerCount)).toBe(1);
-  await page.getByTitle('動画を閉じる', { exact: true }).click();
+  await page.getByLabel('表示倍率').selectOption('10');
+  const close = page.locator('.toolbar').getByTitle('動画を閉じる', { exact: true });
+  await expect(close).toHaveText('閉じる');
+  await close.click();
   expect((await projects(page))[0].pages[0].videos[0]).toEqual(v);
 });
 

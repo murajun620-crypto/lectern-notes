@@ -951,6 +951,18 @@ h3 {
 .stack-video-board .video-box {
   pointer-events: auto;
 }
+.stage-video-controls {
+  position: absolute;
+  inset: 0;
+  z-index: 12;
+  pointer-events: none;
+}
+.stage-video-controls > * {
+  pointer-events: auto;
+}
+.stage[data-ink-preview] .stage-video-controls {
+  visibility: hidden;
+}
 .pdf-page > canvas,
 .pdf-backdrop > canvas {
   position: absolute;
@@ -1235,12 +1247,11 @@ h3 {
 }
 .video-handle {
   position: absolute;
-  transform-origin: top left;
-  background: #fafbf9;
-  color: #303632;
+  background: white;
+  color: #202923;
   display: flex;
   align-items: center;
-  border: 1px solid #d2d8d3;
+  border: 1px solid #aab6ad;
   border-radius: 5px;
   cursor: move;
   padding: 0 2px;
@@ -1249,9 +1260,9 @@ h3 {
 }
 .video-handle button,
 .video-grip {
-  width: 26px;
-  height: 26px;
-  flex: 0 0 26px;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
   display: grid;
   place-items: center;
   padding: 0;
@@ -1266,11 +1277,8 @@ h3 {
 }
 .video-resize {
   position: absolute;
-  right: 0;
-  bottom: 0;
-  transform-origin: right bottom;
-  width: 24px;
-  height: 24px;
+  width: 28px;
+  height: 28px;
   border-radius: 5px;
   background: #fafbf9;
   color: #303632;
@@ -1291,6 +1299,36 @@ h3 {
   min-width: 0;
   min-height: 0;
   z-index: 12;
+}
+.video-playback-actions {
+  position: absolute;
+  display: flex;
+  height: 44px;
+  background: white;
+  border: 1px solid #aab6ad;
+  border-radius: 7px;
+  box-shadow: 0 2px 8px #0002;
+}
+.video-playback-actions button {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 4px;
+  min-width: 42px;
+  min-height: 42px;
+  padding: 0 8px;
+  border-radius: 5px;
+}
+.video-playback-actions button:hover,
+.video-playback-actions button:focus-visible {
+  background: #e9ece8;
+}
+.video-playback-actions .video-close {
+  flex: 1;
+  color: #202923;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
 }
 .player-host {
   position: absolute;
@@ -1978,6 +2016,15 @@ body,
 .toolbar-video-actions button:hover,
 .toolbar-video-actions button:focus-visible {
   background: #e9eee5;
+}
+.toolbar-video-actions .video-close {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 4px;
+  width: 82px;
+  font-weight: 600;
+  white-space: nowrap;
 }
 .toolbar-save-indicator {
   display: flex;

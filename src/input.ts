@@ -23,6 +23,7 @@ export const penWidths = [1, 2.5, 4, 7, 10];
 export const highlighterWidths = [5, 12.5, 20, 35, 50];
 export type InputPreferences = {
   fingerInk: boolean;
+  pencilPressure: boolean;
   palmRejection: boolean;
   twoFingerTap: boolean;
   pageMode: 'continuous' | 'single';
@@ -35,6 +36,7 @@ export type InputPreferences = {
 };
 export const defaultInputPreferences: InputPreferences = {
   fingerInk: false,
+  pencilPressure: false,
   palmRejection: true,
   twoFingerTap: true,
   pageMode: 'continuous',
@@ -58,6 +60,7 @@ export function loadInputPreferences(): InputPreferences {
     const p = JSON.parse(localStorage.getItem('lectern.input') || '{}');
     return {
       fingerInk: p.fingerInk === true,
+      pencilPressure: p.pencilPressure === true,
       palmRejection: p.palmRejection !== false,
       twoFingerTap: p.twoFingerTap !== false,
       pageMode: p.pageMode === 'single' ? 'single' : 'continuous',

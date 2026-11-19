@@ -1001,6 +1001,17 @@ export default function App() {
                 <label>
                   <input
                     type="checkbox"
+                    checked={preferences.pencilPressure}
+                    onChange={(e) =>
+                      setPreferences((p) => ({ ...p, pencilPressure: e.target.checked }))
+                    }
+                  />{' '}
+                  Pencilの筆圧で線の太さを変える
+                </label>
+                <small>OFFにすると、指で書くときと同じ一定の太さになります。</small>
+                <label>
+                  <input
+                    type="checkbox"
                     checked={preferences.palmRejection}
                     onChange={(e) =>
                       setPreferences((p) => ({ ...p, palmRejection: e.target.checked }))
@@ -1173,6 +1184,7 @@ export default function App() {
                   laserWidth={preferences.laserWidth}
                   eraserWidth={preferences.eraserWidth}
                   fingerInk={fingerInk}
+                  pencilPressure={preferences.pencilPressure}
                   pencilTool={pencilTool.current}
                   palmRejection={preferences.palmRejection}
                   twoFingerTap={preferences.twoFingerTap}
@@ -1453,7 +1465,8 @@ export default function App() {
             </p>
             <h3>動画で伝える</h3>
             <p>
-              YouTubeのURLを挿入し、「移動」ツールで配置します。サムネイルをタップすると同じページで再生。Safariが自動再生を止めた場合は、動画内の再生ボタンをもう一度タップしてください。埋め込み禁止やネットワークエラー時には代替リンクを表示します。
+              中央の ▶
+              をタップすると、YouTube動画を同じページで再生します。サムネイルのほかの部分をタップすると配置メニューが開きます。再生中は「閉じる」でサムネイルに戻り、動画の外のページを指でタップすると配置メニューも開きます。Safariが再生を止めた場合は、動画内の再生ボタンをタップしてください。埋め込み禁止やネットワークエラー時には代替リンクを表示します。
             </p>
             <h3>安心して保存するために</h3>
             <p>

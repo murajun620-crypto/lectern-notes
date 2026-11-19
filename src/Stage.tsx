@@ -26,6 +26,7 @@ import type { InkSelection, Position } from './ink-selection';
 
 type InkTransform = ReturnType<typeof selectionTransform>;
 type GestureKind = 'draw' | 'erase' | 'lasso' | 'move' | 'resize' | 'pan' | 'laser';
+type StylusTouch = { touchType?: string; force?: number };
 const changeSelection = (strokes: Stroke[], ids: Set<string>, { scale, x, y }: InkTransform) =>
   strokes.map((stroke) => (ids.has(stroke.id) ? transformStroke(stroke, scale, x, y) : stroke));
 
@@ -39,6 +40,7 @@ type Props = {
   laserWidth: number;
   eraserWidth: number;
   fingerInk: boolean;
+  pencilPressure: boolean;
   pencilTool: PencilTool;
   palmRejection: boolean;
   twoFingerTap: boolean;
@@ -65,6 +67,7 @@ export default function Stage({
   laserWidth,
   eraserWidth,
   fingerInk,
+  pencilPressure,
   pencilTool,
   palmRejection,
   twoFingerTap,
@@ -95,7 +98,13 @@ export default function Stage({
     [selectionPreview, setSelectionPreview] = useState<InkTransform | null>(null),
     [pasteAnchor, setPasteAnchor] = useState<Position | null>(null);
   const [selectedVideo, setSelectedVideo] = useState<string | null>(null);
+  const [playingVideo, setPlayingVideo] = useState<string | null>(null);
+  const [videoControls, setVideoControls] = useState<HTMLDivElement | null>(null);
+  const closePlayback = useCallback((key: string) => {
+    setPlayingVideo((current) => (current === key ? null : current));
+  }, []);
   useEffect(() => setSelectedVideo(null), [page.id, tool]);
+  useEffect(() => setPlayingVideo(null), [page.id, !!continuousPages]);
   const selectionIds = useMemo(() => new Set(selection), [selection]);
   const selected = useMemo(
     () => (selectionIds.size ? page.strokes.filter((stroke) => selectionIds.has(stroke.id)) : []),
@@ -123,8 +132,11 @@ export default function Stage({
     selection: Set<string>;
     shape: InkSelection | null;
     moved?: boolean;
+    playbackTap?: string;
+    usesStylusTouch?: boolean;
     erasure?: { id: string; width: number };
   } | null>(null);
+  const stylusContact = useRef<number | null>(null);
   const touches = useRef(new Map<number, { x: number; y: number }>()),
     pinch = useRef<{ distance: number; zoom: number; anchor: { x: number; y: number } } | null>(
       null,
@@ -286,6 +298,7 @@ export default function Stage({
     lasers.current = [];
     tap.current = null;
     swipe.current = null;
+    stylusContact.current = null;
   }, [page.id, clearInkGesture]);
   useEffect(() => {
     const reset = () => {
@@ -298,6 +311,7 @@ export default function Stage({
       nativePinch.current = null;
       tap.current = null;
       swipe.current = null;
+      stylusContact.current = null;
       clearInkGesture();
     };
     window.addEventListener('blur', reset);
@@ -393,8 +407,14 @@ export default function Stage({
     return {
       x: ((e.clientX - r.left) / r.width) * page.width,
       y: ((e.clientY - r.top) / r.height) * page.height,
-      p: e.pointerType === 'pen' ? (e.pressure ?? 0.5) : 0.5,
+      p: pencilPressure && e.pointerType === 'pen' ? (e.pressure ?? 0.5) : 0.5,
     };
+  };
+  const appendPoint = (points: Point[], p: Point, spacing: number) => {
+    const last = points.at(-1)!;
+    if (Math.hypot(p.x - last.x, p.y - last.y) <= spacing) return false;
+    points.push(p);
+    return true;
   };
   const appendSamples = (e: ReactPointerEvent, g: NonNullable<typeof gesture.current>) => {
     const { points, paperRect } = g;
@@ -417,8 +437,7 @@ export default function Stage({
         },
         paperRect,
       );
-      const last = points.at(-1)!;
-      if (Math.hypot(p.x - last.x, p.y - last.y) > spacing) points.push(p);
+      appendPoint(points, p, spacing);
     }
   };
   const removeSelection = () => {
@@ -612,11 +631,13 @@ export default function Stage({
     const resize = !!(e.target as Element).closest('[data-ink-resize]');
     const inSelection =
       selectionShape && (resize || hitBounds(selectionShape.bounds, p, 7 / screenScale()));
+    const playbackTap = e.pointerType === 'touch' ? (playingVideo ?? undefined) : undefined;
     const isInk =
-      e.pointerType !== 'touch' ||
-      fingerInk ||
-      tool === 'laser' ||
-      (selectedTool === 'select' && inSelection);
+      !playbackTap &&
+      (e.pointerType !== 'touch' ||
+        fingerInk ||
+        tool === 'laser' ||
+        (selectedTool === 'select' && inSelection));
     let kind: GestureKind = 'pan';
     if (isInk) {
       if (selectedTool === 'pen' || selectedTool === 'highlighter') kind = 'draw';
@@ -640,6 +661,7 @@ export default function Stage({
       paperRect,
       selection: selectionIds,
       shape: selectionShape,
+      playbackTap,
     };
     if (kind === 'draw') {
       inkPriority.begin();
@@ -673,7 +695,7 @@ export default function Stage({
       !gesture.current &&
       !(e.target as Element).closest('[data-ink-resize]') &&
       e.button === 0 &&
-      (e.pointerType !== 'touch' || fingerInk || tool === 'laser') &&
+      (e.pointerType !== 'touch' || (!playingVideo && (fingerInk || tool === 'laser'))) &&
       effectiveTool(tool, pencilTool, e.pointerType, fingerInk) !== 'hand'
     ) {
       const box = viewport.current!.getBoundingClientRect();
@@ -728,7 +750,7 @@ export default function Stage({
       lasers.current.push({ ...point(e), t: performance.now() });
       return;
     }
-    if (g.kind === 'draw') {
+    if (g.kind === 'draw' && !g.usesStylusTouch) {
       const before = g.points.length;
       appendSamples(e, g);
       if (g.points.length > before) previewStroke(g.stroke!);
@@ -800,7 +822,16 @@ export default function Stage({
       if (g.kind === 'pan' && g.pointerType === 'touch') {
         const dx = e.clientX - g.client.x,
           dy = e.clientY - g.client.y;
-        if (tool === 'select' && !g.moved && Math.hypot(dx, dy) < 5) selectAt(g.start, g.original);
+        const stationary = !g.moved && Math.hypot(dx, dy) < 5;
+        if (
+          g.playbackTap &&
+          g.playbackTap === playingVideo &&
+          stationary &&
+          performance.now() - g.started < 500
+        ) {
+          closePlayback(g.playbackTap);
+          setSelectedVideo(g.playbackTap);
+        } else if (tool === 'select' && stationary) selectAt(g.start, g.original);
         else turnBySwipe(dx, dy);
       }
     }
@@ -819,8 +850,13 @@ export default function Stage({
           video={v}
           page={owner}
           selected={selectedVideo === key}
+          playing={playingVideo === key}
+          playbackKey={key}
+          controls={videoControls}
           onSelect={() => setSelectedVideo(key)}
           onDeselect={() => setSelectedVideo(null)}
+          onPlay={() => setPlayingVideo(key)}
+          onClosePlayback={closePlayback}
           registerPlayback={registerPlayback}
           pageScale={ownerFit}
           displayZoom={zoom}
@@ -895,7 +931,8 @@ export default function Stage({
           e.stopPropagation();
           return;
         }
-        if (selectedVideo && !(e.target as Element).closest('.video-box')) setSelectedVideo(null);
+        if (selectedVideo && !(e.target as Element).closest('.video-box,[data-video-control]'))
+          setSelectedVideo(null);
       }}
       onPointerMoveCapture={(e) => {
         if (e.pointerType === 'touch' && !palm.current.allowsTouch(e.pointerId)) {
@@ -935,11 +972,20 @@ export default function Stage({
       }}
       onPointerDown={downOnPage}
       onTouchStart={(e) => {
+        const stylus = Array.from(e.changedTouches).find(
+          (contact) => (contact as StylusTouch).touchType === 'stylus',
+        );
+        if (stylus) {
+          stylusContact.current = stylus.identifier;
+          return;
+        }
         const { zoom, pan } = view.current;
         const contacts = Array.from(e.touches) as Array<
           (typeof e.touches)[0] & { radiusX?: number; radiusY?: number; touchType?: string }
         >;
-        const interactive = (e.target as Element).closest('.video-box,[data-selection-control]');
+        const interactive = (e.target as Element).closest(
+          '.video-box,[data-video-control],[data-selection-control]',
+        );
         if (
           contacts.length === 2 &&
           !interactive &&
@@ -1024,6 +1070,29 @@ export default function Stage({
         };
       }}
       onTouchMove={(e) => {
+        const contact = Array.from(e.changedTouches).find(
+          (t) =>
+            t.identifier === stylusContact.current && (t as StylusTouch).touchType === 'stylus',
+        );
+        if (contact) {
+          const g = gesture.current;
+          if (g?.kind === 'draw' && g.pointerType === 'pen') {
+            // The native stylus stream contains contact coordinates even when the
+            // PointerEvent contact flags are missing. Use only one stream from here.
+            g.usesStylusTouch = true;
+            const p = point(
+              {
+                clientX: contact.clientX,
+                clientY: contact.clientY,
+                pointerType: 'pen',
+                pressure: (contact as StylusTouch).force || g.points.at(-1)!.p,
+              },
+              g.paperRect,
+            );
+            if (appendPoint(g.points, p, 0.25 / screenScale())) previewStroke(g.stroke!);
+          }
+          return;
+        }
         const n = nativePinch.current;
         if (n) {
           if (
@@ -1090,6 +1159,10 @@ export default function Stage({
         }
       }}
       onTouchEnd={(e) => {
+        if (Array.from(e.changedTouches).some((t) => t.identifier === stylusContact.current)) {
+          stylusContact.current = null;
+          return;
+        }
         if (nativePinch.current) {
           nativePinch.current.ending = true;
           if (interacting.current) commitView();
@@ -1114,7 +1187,11 @@ export default function Stage({
         if (!palm.current.blocksNavigation(performance.now(), palmRejection))
           turnBySwipe((t.clientX || g.lastX) - g.x, (t.clientY || g.lastY) - g.y);
       }}
-      onTouchCancel={() => {
+      onTouchCancel={(e) => {
+        if (Array.from(e.changedTouches).some((t) => t.identifier === stylusContact.current)) {
+          stylusContact.current = null;
+          return;
+        }
         if (swipe.current?.panning && interacting.current) commitView();
         swipe.current = null;
         if (nativePinch.current) {
@@ -1226,6 +1303,7 @@ export default function Stage({
             ))}
         </div>
       )}
+      <div ref={setVideoControls} className="stage-video-controls" />
       <canvas ref={laserCanvas} className="laser-canvas" />
       <div
         ref={eraserCursor}

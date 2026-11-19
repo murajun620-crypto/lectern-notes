@@ -52,6 +52,7 @@ async function nativeTouch(
     clientX: number;
     clientY: number;
     touchType?: string;
+    force?: number;
     radiusX?: number;
     radiusY?: number;
   }[],
@@ -409,6 +410,48 @@ test.describe('Pencil contact samples', () => {
         258,
       ]);
   });
+
+  test('native Pencil contact supplies the path without pressure or hover samples', async ({
+    page,
+  }) => {
+    await demo(page);
+    const paper = (await page.getByTestId('pdf-page').boundingBox())!;
+    const x = paper.x + paper.width * 0.25;
+    const y = paper.y + paper.height * 0.3;
+    await page.getByTestId('stage').evaluate(() => {
+      HTMLElement.prototype.setPointerCapture = () => {};
+    });
+    const contact = (dx: number, dy = dx / 4) => ({
+      identifier: 7,
+      clientX: x + dx,
+      clientY: y + dy,
+      touchType: 'stylus',
+      force: dx === 32 ? 0.9 : 0,
+    });
+    await nativeTouch(page, 'touchstart', [contact(0)]);
+    await pointer(page, 'pointerdown', 43, 'pen', x, y, { pressure: 0.05 });
+    for (const dx of [16, 32, 48, 64]) {
+      const c = contact(dx);
+      await pointer(page, 'pointermove', 43, 'pen', c.clientX, c.clientY, {
+        buttons: dx === 32 ? 1 : 0,
+        pressure: 0,
+      });
+      await nativeTouch(page, 'touchmove', [c]);
+    }
+    await nativeTouch(page, 'touchend', [], [contact(82, -30)]);
+    await pointer(page, 'pointermove', 43, 'pen', x + 88, y - 30, { buttons: 0, pressure: 0 });
+    await pointer(page, 'pointerup', 43, 'pen', x + 95, y - 45);
+    await expect
+      .poll(async () => {
+        const pg = (await stored(page))[0].pages[0];
+        return pg.strokes[0]?.points.map((p: { x: number; y: number; p: number }) => [
+          Math.round(paper.x + (p.x / pg.width) * paper.width - x),
+          Math.round(paper.y + (p.y / pg.height) * paper.height - y),
+          p.p,
+        ]);
+      })
+      .toEqual([0, 16, 32, 48, 64].map((dx) => [dx, dx / 4, 0.5]));
+  });
 });
 
 test('Pencil paint takes priority over PDF refresh and lift-off cannot extend the stroke', async ({
@@ -756,8 +799,8 @@ test('a small Shorts placement plays upright at the saved size and can enlarge o
   await page.getByRole('button', { name: '動画をページ内で再生' }).click();
   await expect(page.getByTitle('YouTube動画', { exact: true })).toBeVisible();
   const iframe = page.getByTitle('YouTube動画', { exact: true });
-  const toolbar = page.locator('.toolbar');
-  await expect(page.getByTestId('video-box').locator('.video-handle')).toHaveCount(0);
+  const controls = page.getByRole('group', { name: '動画の再生操作' });
+  await expect(page.locator('.video-handle')).toHaveCount(0);
   const r = (await iframe.boundingBox())!;
   expect(r.width).toBeCloseTo(before.width, 0);
   expect(r.height).toBeCloseTo(before.height, 0);
@@ -765,15 +808,18 @@ test('a small Shorts placement plays upright at the saved size and can enlarge o
   expect(r.y).toBeCloseTo(before.y, 0);
   expect(await iframe.evaluate((el) => el.clientWidth)).toBeGreaterThanOrEqual(200);
   await iframe.evaluate((el) => el.setAttribute('data-instance', 'original'));
-  await toolbar.getByTitle('動画を拡大', { exact: true }).click();
+  const controlsRect = (await controls.boundingBox())!;
+  expect(controlsRect.y + controlsRect.height).toBeLessThan(r.y);
+  await controls.getByTitle('動画を拡大', { exact: true }).click();
   const big = (await iframe.boundingBox())!;
   expect(big.width).toBeGreaterThan(160);
   expect(big.width / big.height).toBeCloseTo(9 / 16);
-  await toolbar.getByTitle('配置サイズに戻す', { exact: true }).click();
+  await controls.getByTitle('配置サイズに戻す', { exact: true }).click();
   expect((await iframe.boundingBox())!.width).toBeCloseTo(before.width, 0);
   await expect(iframe).toHaveAttribute('data-instance', 'original');
-  await toolbar.getByTitle('動画を閉じる', { exact: true }).click();
-  await expect(toolbar.locator('.toolbar-video-actions')).toHaveCount(0);
+  await expect(controls.getByTitle('動画を閉じる', { exact: true })).toHaveText('閉じる');
+  await controls.getByTitle('動画を閉じる', { exact: true }).click();
+  await expect(controls).toHaveCount(0);
   expect((await page.getByTestId('video-box').boundingBox())!.width).toBeCloseTo(before.width, 0);
   await page.getByRole('button', { name: '全画面表示を終了', exact: true }).click();
   await page.getByRole('button', { name: 'ペン', exact: true }).click();
@@ -792,6 +838,46 @@ test('a small Shorts placement plays upright at the saved size and can enlarge o
   await page.reload();
   await expect(page.getByTestId('video-box')).toBeVisible();
   expect((await stored(page))[0].pages[0].videos[0]).toEqual(savedVideo);
+});
+
+test('finger taps outside playback bring up the ribbon and preserve single-tap replay', async ({
+  browser,
+}) => {
+  const context = await browser.newContext({
+    viewport: { width: 1024, height: 768 },
+    deviceScaleFactor: 2,
+    hasTouch: true,
+  });
+  try {
+    const page = await context.newPage();
+    await mockYoutube(page);
+    await demo(page);
+    await page.getByRole('button', { name: 'YouTube挿入' }).click();
+    await page.getByLabel('YouTube URL').fill('https://youtu.be/M7lc1UVf-VE');
+    await page.getByRole('button', { name: 'このページに追加' }).click();
+    await page.getByLabel('入力設定', { exact: true }).click();
+    await page.getByLabel('指でも筆記する').check();
+    await page.getByLabel('入力設定', { exact: true }).click();
+    const box = page.getByTestId('video-box');
+    const play = box.getByRole('button', { name: '動画をページ内で再生', exact: true });
+    const thumb = box.getByRole('button', { name: 'サムネイルを選択', exact: true });
+    const ribbon = page.locator('.stage-video-controls .video-handle');
+    await play.tap();
+    await expect(box.locator('iframe')).toBeVisible();
+    const r = (await box.boundingBox())!;
+    await page.touchscreen.tap(Math.round(r.x + r.width / 2), Math.round(r.y + r.height + 35));
+    await expect(ribbon).toBeVisible();
+    await expect(box.locator('iframe')).toHaveCount(0);
+    await play.tap();
+    await expect(box.locator('iframe')).toBeVisible();
+    await page.getByTitle('動画を閉じる', { exact: true }).tap();
+    await expect(ribbon).toHaveCount(0);
+    await thumb.tap({ position: { x: 5, y: 5 } });
+    await expect(ribbon).toBeVisible();
+    await expect.poll(async () => (await stored(page))[0].pages[0].strokes).toHaveLength(0);
+  } finally {
+    await context.close();
+  }
 });
 
 test('collapsed videos retain their placement and play silently until the player responds', async ({
@@ -823,8 +909,8 @@ test('collapsed videos retain their placement and play silently until the player
   const select = box.getByRole('button', { name: 'サムネイルを選択', exact: true });
   const play = box.getByRole('button', { name: '動画をページ内で再生' });
   const thumbnail = box.locator('img');
-  const fold = box.getByTitle('動画を折りたたむ', { exact: true });
-  const unfold = box.getByTitle('折りたたみを解除', { exact: true });
+  const fold = page.getByTitle('動画を折りたたむ', { exact: true });
+  const unfold = page.getByTitle('折りたたみを解除', { exact: true });
   const savedVideos = async () => (await stored(page))[0]?.pages[0].videos;
   await expect.poll(savedVideos).toHaveLength(1);
   const [original] = await savedVideos();
@@ -833,7 +919,7 @@ test('collapsed videos retain their placement and play silently until the player
   const unfolded = (await box.boundingBox())!;
   await fold.click();
   await expect(thumbnail).toHaveCount(0);
-  await expect(box.getByTitle('動画のサイズ変更')).toBeHidden();
+  await expect(page.getByTitle('動画のサイズ変更')).toBeHidden();
   const folded = (await select.boundingBox())!;
   expect(folded.width).toBeCloseTo(44, 0);
   expect(folded.height).toBeCloseTo(44, 0);
@@ -869,7 +955,7 @@ test('collapsed videos retain their placement and play silently until the player
     'href',
     'https://www.youtube.com/watch?v=M7lc1UVf-VE',
   );
-  await page.locator('.toolbar').getByTitle('動画を閉じる', { exact: true }).click();
+  await page.getByTitle('動画を閉じる', { exact: true }).click();
   await expect(select).toBeVisible();
   await expect(thumbnail).toHaveCount(0);
   expect((await select.boundingBox())!.width).toBeCloseTo(44, 0);

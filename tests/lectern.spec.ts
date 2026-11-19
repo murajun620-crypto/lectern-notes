@@ -236,15 +236,15 @@ test('YouTube placement controls appear on selection and stay available in fulls
   await saved(page);
   const before = (await stored(page))[0].pages[0].videos[0];
   const box = page.getByTestId('video-box');
-  const handle = box.locator('.video-handle');
+  const handle = page.locator('.stage-video-controls .video-handle');
   await expect(handle).toHaveCount(0);
-  await expect(box.getByTitle('動画のサイズ変更')).toHaveCount(0);
+  await expect(page.getByTitle('動画のサイズ変更')).toHaveCount(0);
   await box
     .getByRole('button', { name: 'サムネイルを選択', exact: true })
     .click({ position: { x: 4, y: 4 } });
   const r = (await handle.boundingBox())!;
-  expect(r.height).toBeCloseTo(28, 0);
-  expect(r.width).toBeCloseTo(136, 0);
+  expect(r.height).toBeCloseTo(36, 0);
+  expect(r.width).toBeCloseTo(176, 0);
   await page.mouse.move(r.x + 20, r.y + 10);
   await page.mouse.down();
   await page.mouse.move(r.x + 80, r.y + 30, { steps: 6 });
@@ -423,6 +423,9 @@ test('touch navigation, pinch and pressure-bearing pen input in landscape', asyn
   await touch('touchEnd', []);
   await expect(page.getByLabel('ページ番号')).toHaveValue('2');
   await page.getByLabel('表示倍率').selectOption('1');
+  await page.getByLabel('入力設定', { exact: true }).click();
+  await page.getByLabel('Pencilの筆圧で線の太さを変える').check();
+  await page.getByLabel('入力設定', { exact: true }).click();
   r = (await page.getByTestId('pdf-page').boundingBox())!;
   await session.send('Input.dispatchMouseEvent', {
     type: 'mouseMoved',
