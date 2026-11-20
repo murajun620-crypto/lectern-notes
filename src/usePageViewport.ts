@@ -5,6 +5,12 @@ import type { VideoBounds } from './video-layout';
 
 type Offset = { x: number; y: number };
 export type PageView = { zoom: number; pan: Offset };
+export type StageLocation = {
+  pageId: string;
+  center: Offset; // Viewport center in this page's unscaled PDF coordinates.
+  zoom: number;
+  fitWidth: boolean;
+};
 
 const maxPageZoom = 10;
 export const pageZoomSteps = [1, 1.25, 1.5, 2, 3, 4, 5, 6, 8, maxPageZoom];
@@ -41,6 +47,7 @@ export function usePageViewport({
   size,
   fit,
   zoom,
+  restoreLocation,
   setZoom,
   showInkPreview,
   paintOverlays,
@@ -60,6 +67,7 @@ export function usePageViewport({
   size: { w: number; h: number };
   fit: number;
   zoom: number;
+  restoreLocation?: StageLocation | null;
   setZoom: (z: number) => void;
   showInkPreview: () => void;
   paintOverlays: (view: PageView) => void;
@@ -88,6 +96,7 @@ export function usePageViewport({
     idle = useRef<ReturnType<typeof setTimeout> | undefined>(undefined),
     previousPage = useRef(pageId);
   const coastFrame = useRef<number | null>(null);
+  const appliedLocation = useRef<StageLocation | null>(null);
   const coastSpeed = useRef(0);
   const fitScale = fit * Math.min(devicePixelRatio || 1, 2);
   const maxScale = rasterScaleLimit(width, height);
@@ -281,17 +290,39 @@ export function usePageViewport({
   }, [commit]);
   useLayoutEffect(() => {
     const changed = previousPage.current !== pageId;
+    // A return can coincide with a sidebar resize or a newly mounted stage.
+    // Wait for the measured fit before converting the saved PDF point to pixels.
+    const target =
+      restoreLocation &&
+      restoreLocation !== appliedLocation.current &&
+      restoreLocation.pageId === pageId &&
+      restoreLocation.zoom === zoom &&
+      viewport.current?.clientWidth === size.w &&
+      viewport.current.clientHeight === size.h
+        ? restoreLocation
+        : null;
     if (frame.current !== null) cancelAnimationFrame(frame.current);
     frame.current = null;
-    if (changed) {
+    if (changed || target) {
       stopCoast();
       const carriedPan = takePagePan(pageId);
-      if (!carriedPan) clearDetail();
+      if (changed && !carriedPan) clearDetail();
       previousPage.current = pageId;
       interacting.current = false;
       moved.current = false;
       clearTimeout(idle.current);
-      const pan = carriedPan ?? { x: 0, y: 0 };
+      let pan = carriedPan ?? { x: 0, y: 0 };
+      if (target) {
+        appliedLocation.current = target;
+        pan = limit(
+          {
+            x: (width / 2 - target.center.x) * fit * zoom,
+            y: (height / 2 - target.center.y) * fit * zoom,
+          },
+          zoom,
+        );
+        if (viewport.current?.hasAttribute('data-ink-preview')) setSettled((v) => v + 1);
+      }
       view.current = { zoom, pan };
       setPan(pan);
     } else {
@@ -308,7 +339,21 @@ export function usePageViewport({
       }
     }
     paint();
-  }, [pageId, zoom, limit, paint, clearDetail, takePagePan, stopCoast]);
+  }, [
+    pageId,
+    zoom,
+    limit,
+    paint,
+    clearDetail,
+    takePagePan,
+    stopCoast,
+    restoreLocation,
+    viewport,
+    size,
+    width,
+    height,
+    fit,
+  ]);
   useEffect(
     () => () => {
       if (frame.current !== null) cancelAnimationFrame(frame.current);

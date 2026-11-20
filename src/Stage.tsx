@@ -1,5 +1,13 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { PointerEvent as ReactPointerEvent } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
+import type { PointerEvent as ReactPointerEvent, Ref } from 'react';
 import { flushSync } from 'react-dom';
 import { drawLaser, strokeHit, transformStroke, uid } from './model';
 import type { Page, PenKind, Point, Stroke, Tool, Video } from './model';
@@ -10,7 +18,7 @@ import { effectiveTool, PalmGuard } from './input';
 import type { InkPriority, PencilTool } from './input';
 import type { PencilDiagnostics } from './pencil-diagnostics';
 import { clampPageZoom, usePageViewport } from './usePageViewport';
-import type { PageView } from './usePageViewport';
+import type { PageView, StageLocation } from './usePageViewport';
 import { panVelocity, recordPan } from './touch-momentum';
 import type { PanHistory } from './touch-momentum';
 import { useInkLayer } from './useInkLayer';
@@ -27,6 +35,8 @@ import {
   selectionTransform,
 } from './ink-selection';
 import type { InkSelection, Position } from './ink-selection';
+
+export type { StageLocation } from './usePageViewport';
 
 type InkTransform = ReturnType<typeof selectionTransform>;
 type GestureKind = 'draw' | 'erase' | 'lasso' | 'move' | 'resize' | 'pan' | 'laser';
@@ -64,6 +74,8 @@ const changeSelection = (strokes: Stroke[], ids: Set<string>, { scale, x, y }: I
 
 type Props = {
   page: Page;
+  captureViewRef?: Ref<() => StageLocation>;
+  restoreLocation?: StageLocation | null;
   continuousPages?: Page[];
   onFocusPage: (id: string) => void;
   tool: Tool;
@@ -94,6 +106,8 @@ type Props = {
 };
 export default function Stage({
   page,
+  captureViewRef,
+  restoreLocation,
   continuousPages,
   onFocusPage,
   tool,
@@ -219,7 +233,15 @@ export default function Stage({
       stage.setAttribute('data-ink-preview', '');
   }, []);
   const stack = usePageStack(continuousPages, page, size, fitWidth, onFocusPage);
-  const { fit, contentBounds, paintStack, pagePosition, settleStack, takePagePan } = stack;
+  const {
+    fit,
+    captureLocation,
+    contentBounds,
+    paintStack,
+    pagePosition,
+    settleStack,
+    takePagePan,
+  } = stack;
   const paintOverlays = useCallback(
     (view: PageView) => {
       paintPreview.current(view);
@@ -255,6 +277,7 @@ export default function Stage({
     size,
     fit,
     zoom,
+    restoreLocation: restoreLocation?.fitWidth === fitWidth ? restoreLocation : null,
     setZoom,
     showInkPreview,
     paintOverlays,
@@ -263,6 +286,10 @@ export default function Stage({
     settleStack,
     takePagePan,
   });
+  useImperativeHandle(captureViewRef, () => () => captureLocation(view.current), [
+    captureLocation,
+    view,
+  ]);
   const penBusy = inkPriority.isBusy;
   const pdfBusy = useCallback(() => interacting.current || penBusy(), [interacting, penBusy]);
   const stackPdfBusy = useCallback(

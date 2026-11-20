@@ -1035,6 +1035,24 @@ h3 {
   min-width: 0;
   position: relative;
 }
+.return-view {
+  position: absolute;
+  z-index: 11;
+  left: 10px;
+  bottom: max(8px, env(safe-area-inset-bottom));
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 40px;
+  padding: 0 12px;
+  color: var(--green);
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 2px 6px #13262119;
+  font-size: 12px;
+  touch-action: manipulation;
+}
 .stage {
   position: absolute;
   inset: 0;
@@ -1658,6 +1676,31 @@ dialog > p {
 }
 .busy-overlay p {
   margin: 15px 0 0;
+}
+.project-versions {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 6px 16px;
+  font-size: 12px;
+}
+.project-versions dd {
+  margin: 0;
+}
+.project-file-notice:not(:empty) {
+  position: fixed;
+  z-index: 400;
+  bottom: max(60px, env(safe-area-inset-bottom));
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: calc(100vw - 32px);
+  width: max-content;
+  overflow-wrap: anywhere;
+  padding: 8px 14px;
+  border-radius: 8px;
+  background: var(--green);
+  color: #fff;
+  font-size: 12px;
+  pointer-events: none;
 }
 .error-toast {
   position: fixed;

@@ -146,13 +146,49 @@ export function download(blob: Blob, name: string) {
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
-export async function exportBackup(p: Project) {
-  const zip = new JSZip();
-  zip.file('project.json', JSON.stringify({ format: 'lectern', version: 2, project: p }));
-  for (const id of new Set(p.pages.flatMap((pg) => (pg.assetId ? [pg.assetId] : []))))
-    zip.file(`assets/${id}.pdf`, await getAsset(id));
-  return zip.generateAsync({ type: 'blob', compression: 'STORE' });
+type ArchiveFormat = 'lectern' | 'lectern-project';
+export const projectFileSignature = 'LECTERN/1\n';
+const fileSizeLimit = 500 * 1024 * 1024;
+function assetIds(project: Project) {
+  return new Set(project.pages.flatMap((pg) => (pg.assetId ? [pg.assetId] : [])));
 }
+async function exportArchive(p: Project, format: ArchiveFormat) {
+  const zip = new JSZip();
+  const version = format === 'lectern' ? 2 : 1;
+  zip.file('project.json', JSON.stringify({ format, version, project: p }));
+  for (const id of assetIds(p)) zip.file(`assets/${id}.pdf`, await getAsset(id));
+  if (format === 'lectern') return zip.generateAsync({ type: 'blob', compression: 'STORE' });
+  // JSZip's normal Blob output first concatenates every byte into a single Uint8Array.
+  // Let the browser assemble the signed file directly from chunks on memory-limited iPads.
+  return new Promise<Blob>((resolve, reject) => {
+    const parts: BlobPart[] = [projectFileSignature];
+    const stream = zip.generateInternalStream({
+      type: 'uint8array',
+      compression: 'STORE',
+      streamFiles: true,
+    });
+    let size = projectFileSignature.length;
+    stream
+      .on('data', (chunk) => {
+        size += chunk.byteLength;
+        if (size > fileSizeLimit) {
+          stream.pause();
+          reject(new Error('プロジェクトファイルは500 MB以下にしてください。'));
+        } else parts.push(chunk);
+      })
+      .on('error', reject)
+      .on('end', () => {
+        try {
+          resolve(new Blob(parts, { type: 'application/octet-stream' }));
+        } catch (error) {
+          reject(error);
+        }
+      })
+      .resume();
+  });
+}
+export const exportBackup = (p: Project) => exportArchive(p, 'lectern');
+export const exportProjectFile = (p: Project) => exportArchive(p, 'lectern-project');
 const finite = (v: unknown, min: number, max: number): v is number =>
   typeof v === 'number' && Number.isFinite(v) && v >= min && v <= max;
 export function validateProject(p: unknown): asserts p is Project {
@@ -262,9 +298,16 @@ export function validateProject(p: unknown): asserts p is Project {
         return fail();
   }
 }
-export async function importBackup(file: File): Promise<Project> {
-  if (file.size > 500 * 1024 * 1024) throw new Error('バックアップは500 MB以下にしてください。');
-  const zip = await JSZip.loadAsync(file);
+async function readArchive(file: File, format: ArchiveFormat) {
+  if (file.size > fileSizeLimit) throw new Error('ファイルは500 MB以下にしてください。');
+  let body: Blob = file;
+  if (format === 'lectern-project') {
+    const header = await file.slice(0, projectFileSignature.length).text();
+    if (header !== projectFileSignature)
+      throw new Error('対応するLecternプロジェクト（.lectern）を選択してください。');
+    body = file.slice(projectFileSignature.length);
+  }
+  const zip = await JSZip.loadAsync(await body.arrayBuffer());
   // Check declared inflated lengths before decompressing untrusted ZIP content.
   let total = 0;
   for (const entry of Object.values(zip.files)) {
@@ -272,27 +315,41 @@ export async function importBackup(file: File): Promise<Project> {
       (entry as unknown as { _data?: { uncompressedSize: number } })._data?.uncompressedSize || 0;
   }
   if (total > 750 * 1024 * 1024 || Object.keys(zip.files).length > 4000)
-    throw new Error('バックアップの展開サイズが大きすぎます。');
+    throw new Error('ファイルの展開サイズが大きすぎます。');
   const meta = zip.file('project.json');
-  if (!meta) throw new Error('Lecternのバックアップを選択してください。');
+  if (!meta) throw new Error('Lecternの資料データが見つかりません。');
   const raw = JSON.parse(await meta.async('string'));
-  if (raw.format !== 'lectern' || ![1, 2].includes(raw.version))
-    throw new Error('未対応のバックアップ形式です。');
+  const versions = format === 'lectern' ? [1, 2] : [1];
+  if (!raw || raw.format !== format || !versions.includes(raw.version))
+    throw new Error(
+      format === 'lectern'
+        ? '未対応のバックアップ形式です。'
+        : 'Lecternプロジェクト（.lectern）を選択してください。',
+    );
   validateProject(raw.project);
-  const p: Project = raw.project,
-    assets = new Map<string, string>(),
+  return { project: raw.project as Project, zip };
+}
+async function readPdfAsset(zip: JSZip, assetId: string) {
+  const entry = zip.file(`assets/${assetId}.pdf`);
+  if (!entry) throw new Error('ファイル内のPDFが不足しています。');
+  const data = await entry.async('arraybuffer');
+  if (
+    !new TextDecoder()
+      .decode(new Uint8Array(data, 0, Math.min(1024, data.byteLength)))
+      .includes('%PDF-')
+  )
+    throw new Error('ファイル内のPDFが不正です。');
+  return data;
+}
+export async function importBackup(file: File): Promise<Project> {
+  const { project: p, zip } = await readArchive(file, 'lectern');
+  const assets = new Map<string, string>(),
     pending: { id: string; data: ArrayBuffer }[] = [];
-  for (const pg of p.pages)
-    if (pg.assetId && !assets.has(pg.assetId)) {
-      const entry = zip.file(`assets/${pg.assetId}.pdf`);
-      if (!entry) throw new Error('バックアップ内のPDFが不足しています。');
-      const data = await entry.async('arraybuffer');
-      if (!new TextDecoder().decode(data.slice(0, 1024)).includes('%PDF-'))
-        throw new Error('バックアップ内のPDFが不正です。');
-      const id = uid();
-      assets.set(pg.assetId, id);
-      pending.push({ id, data });
-    }
+  for (const assetId of assetIds(p)) {
+    const id = uid();
+    assets.set(assetId, id);
+    pending.push({ id, data: await readPdfAsset(zip, assetId) });
+  }
   const restored: Project = {
     ...p,
     id: uid(),
@@ -314,4 +371,127 @@ export async function importBackup(file: File): Promise<Project> {
     },
   );
   return restored;
+}
+
+export type PreparedProjectFile = {
+  project: Project;
+  existing: Project | undefined;
+  conflict: boolean;
+  assets: Map<string, ArrayBuffer>;
+};
+
+// Never write a file-supplied asset ID to the shared store. Identical PDF bytes can be
+// shared across documents, and changing a PDF always creates a new PDF.js cache key.
+async function pdfContentKey(data: ArrayBuffer) {
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', data));
+  return 'sha256-' + Array.from(digest, (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function editableContent(p: Project, canonical: Map<string, string>) {
+  const pages = p.pages.map((pg) =>
+    pg.assetId ? { ...pg, assetId: canonical.get(pg.assetId) ?? pg.assetId } : pg,
+  );
+  return JSON.stringify([p.name, p.subject, p.academicYear, pages]);
+}
+
+export async function prepareProjectFile(file: File): Promise<PreparedProjectFile> {
+  const { project: incoming, zip } = await readArchive(file, 'lectern-project');
+  const safeId = /^[\w-]{1,80}$/;
+  if (
+    typeof incoming.id !== 'string' ||
+    !safeId.test(incoming.id) ||
+    !finite(incoming.createdAt, 0, 8.64e15) ||
+    !finite(incoming.updatedAt, 0, 8.64e15) ||
+    incoming.pages.some((page) => !safeId.test(page.id))
+  ) {
+    throw new Error('プロジェクトの識別子または日時が不正です。');
+  }
+  const existing: Project | undefined = await withStorage(
+    '教材を確認できませんでした',
+    (database) => database.get('projects', incoming.id),
+  );
+  const localByContent = new Map<string, string>();
+  const contentByLocal = new Map<string, string>();
+  if (existing) {
+    for (const id of assetIds(existing)) {
+      let hash: string | undefined;
+      if (/^sha256-[0-9a-f]{64}$/.test(id)) {
+        const key = await withStorage('元のPDFを確認できませんでした', (database) =>
+          database.getKey('assets', id),
+        );
+        if (key) hash = id;
+      } else {
+        const data: ArrayBuffer | undefined = await withStorage(
+          '元のPDFを確認できませんでした',
+          (database) => database.get('assets', id),
+        );
+        if (data) hash = await pdfContentKey(data);
+      }
+      if (hash) {
+        localByContent.set(hash, id);
+        contentByLocal.set(id, hash);
+      }
+    }
+  }
+  const assets = new Map<string, ArrayBuffer>();
+  const mapped = new Map<string, string>();
+  for (const id of assetIds(incoming)) {
+    const data = await readPdfAsset(zip, id);
+    const hash = await pdfContentKey(data);
+    // Keep distinct local references when a PDF was appended twice before export.
+    const localId = contentByLocal.get(id) === hash ? id : localByContent.get(hash);
+    mapped.set(id, localId ?? hash);
+    if (!localId) assets.set(hash, data);
+  }
+  const project = {
+    ...incoming,
+    pages: incoming.pages.map((pg) =>
+      pg.assetId ? { ...pg, assetId: mapped.get(pg.assetId)! } : pg,
+    ),
+  };
+  return {
+    project,
+    existing,
+    conflict:
+      !!existing &&
+      editableContent(existing, contentByLocal) !== editableContent(project, contentByLocal),
+    assets,
+  };
+}
+
+export async function openProjectFile(
+  prepared: PreparedProjectFile,
+  replace = false,
+): Promise<Project> {
+  const { project, existing, conflict, assets } = prepared;
+  if (conflict && !replace) throw new Error('この端末の資料を置き換えるか選んでください。');
+  let opened = project;
+  await writeTransaction('プロジェクトを開けませんでした', ['projects', 'assets'], async (tx) => {
+    const projects = tx.objectStore('projects');
+    const stored: Project | undefined = await projects.get(project.id);
+    if (JSON.stringify(stored) !== JSON.stringify(existing))
+      throw new Error('確認中にこの端末の資料が変更されました。ファイルをもう一度開いてください。');
+    const pdfs = tx.objectStore('assets');
+    for (const [id, data] of assets)
+      if ((await pdfs.getKey(id)) === undefined) await pdfs.add(data, id);
+    if (stored && !conflict) {
+      opened =
+        stored.currentPage === project.currentPage
+          ? stored
+          : { ...stored, currentPage: project.currentPage };
+      if (opened !== stored) await projects.put(opened);
+      return;
+    }
+    await projects.put(project);
+    if (stored) {
+      const old = assetIds(stored);
+      for (const id of assetIds(project)) old.delete(id);
+      if (old.size) {
+        for (const other of (await projects.getAll()) as Project[])
+          for (const id of assetIds(other)) old.delete(id);
+        for (const id of old) await pdfs.delete(id);
+      }
+    }
+  });
+  return opened;
 }

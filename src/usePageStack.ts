@@ -8,7 +8,7 @@ import {
   stackPageAt,
 } from './page-stack';
 import type { StackPage } from './page-stack';
-import type { PageView } from './usePageViewport';
+import type { PageView, StageLocation } from './usePageViewport';
 
 export function usePageStack(
   pages: Page[] | undefined,
@@ -28,6 +28,26 @@ export function usePageStack(
   const activeId = active?.page.id;
   const activeCenter = active?.center;
   const fit = active?.fit ?? pageFit(page, size, fitWidth);
+  const captureLocation = useCallback(
+    (view: PageView): StageLocation => {
+      const y = -view.pan.y / view.zoom;
+      // During momentum the centered sheet can already differ from the focused sheet.
+      const item = activeCenter === undefined ? undefined : stackPageAt(stack, activeCenter + y);
+      const sheet = item?.page ?? page;
+      const sheetFit = item?.fit ?? fit;
+      const offset = item && activeCenter !== undefined ? item.center - activeCenter : 0;
+      return {
+        pageId: sheet.id,
+        center: {
+          x: sheet.width / 2 - view.pan.x / (sheetFit * view.zoom),
+          y: sheet.height / 2 + (y - offset) / sheetFit,
+        },
+        zoom: view.zoom,
+        fitWidth,
+      };
+    },
+    [activeCenter, stack, page, fit, fitWidth],
+  );
   const contentBounds = pageContentBounds(page);
   if (active) {
     contentBounds.top = (stack[0].start - active.top) / fit;
@@ -119,6 +139,7 @@ export function usePageStack(
   return {
     active,
     fit,
+    captureLocation,
     contentBounds,
     paperLayer,
     videoLayer,

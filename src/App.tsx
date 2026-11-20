@@ -5,11 +5,13 @@ import {
   ArrowDown,
   ArrowUp,
   BookOpen,
+  BookmarkPlus,
   Check,
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
   Copy,
+  CornerUpLeft,
   Download,
   Eraser,
   FilePlus2,
@@ -26,6 +28,7 @@ import {
   PenLine,
   Plus,
   Redo2,
+  Save,
   Search,
   Share,
   Settings2,
@@ -65,7 +68,7 @@ import {
 import { matchesTag, ProjectTagForm, TagFilter } from './ProjectTags';
 import { PdfShare } from './PdfShare';
 import { demoFile, exportPdf, importPdf, releasePdfs, renderPage } from './pdf';
-import Stage from './Stage';
+import Stage, { type StageLocation } from './Stage';
 import {
   createInkPriority,
   highlighterWidths,
@@ -83,6 +86,7 @@ import type { PlaybackActions, RegisterPlayback } from './VideoBox';
 import { pageZoomSteps } from './usePageViewport';
 import UpdateButton from './UpdateButton';
 import { useFullscreen } from './useFullscreen';
+import { useProjectFile } from './useProjectFile';
 function IconButton({
   label,
   children,
@@ -280,6 +284,9 @@ export default function App() {
     [fullscreenSidebar, setFullscreenSidebar] = useState(false),
     [documentTools, setDocumentTools] = useState(false);
   const { fullscreen, toggleFullscreen, exitFullscreen } = useFullscreen();
+  const captureViewRef = useRef<(() => StageLocation) | null>(null);
+  const [returnViews, setReturnViews] = useState<StageLocation[]>([]);
+  const [restoreLocation, setRestoreLocation] = useState<StageLocation | null>(null);
   const showSidebar = fullscreen ? fullscreenSidebar : sidebar;
   const [videoPlayback, setVideoPlayback] = useState<Record<string, PlaybackActions>>({});
   const registerPlayback = useCallback<RegisterPlayback>((key, actions) => {
@@ -534,6 +541,39 @@ export default function App() {
     setProject((p) => (p ? { ...fn(p), updatedAt: Date.now() } : p));
   };
   const page = project?.pages[project.currentPage];
+  const returnView = returnViews.at(-1);
+  const returnPage =
+    returnView && project ? project.pages.findIndex((pg) => pg.id === returnView.pageId) : -1;
+  const rememberView = () => {
+    const location = captureViewRef.current?.();
+    if (!location) return;
+    setReturnViews((entries) => {
+      const last = entries.at(-1);
+      if (
+        last &&
+        last.pageId === location.pageId &&
+        last.fitWidth === location.fitWidth &&
+        Math.abs(last.zoom - location.zoom) < 0.0001 &&
+        Math.hypot(last.center.x - location.center.x, last.center.y - location.center.y) < 0.1
+      )
+        return entries;
+      return [...entries.slice(-15), location];
+    });
+  };
+  const jumpToPage = (index: number) => {
+    if (!project || index === project.currentPage) return;
+    rememberView();
+    setRestoreLocation(null);
+    update((p) => ({ ...p, currentPage: index }));
+  };
+  const returnToView = () => {
+    if (!returnView || returnPage < 0 || !project) return;
+    setReturnViews((entries) => entries.slice(0, -1));
+    setFitWidth(returnView.fitWidth);
+    setZoom(returnView.zoom);
+    setRestoreLocation(returnView);
+    if (returnPage !== project.currentPage) update((p) => ({ ...p, currentPage: returnPage }));
+  };
   const replacePage = useCallback((p: Project, next: Page) => {
     const updatedAt = Date.now();
     const replace = (base: Project) => ({
@@ -565,6 +605,7 @@ export default function App() {
     [replacePage],
   );
   const navigate = useCallback((delta: number) => {
+    setRestoreLocation(null);
     setSaved(false);
     setProject((p) =>
       p ? { ...p, currentPage: clamp(p.currentPage + delta, 0, p.pages.length - 1) } : p,
@@ -661,12 +702,15 @@ export default function App() {
     setSaved(true);
     setSaveIssue('');
     setProject(p);
+    setReturnViews([]);
+    setRestoreLocation(null);
     history.current.clear();
     setZoom(1);
     exitFullscreen();
     setTool('pen');
     void navigator.storage?.persist?.().catch(() => {});
   };
+  const projectFile = useProjectFile(project?.id, open, run);
   const newFromPdf = async (file: File, adding = false) => {
     const { pages, asset } = await importPdf(file);
     if (adding && current.current) {
@@ -708,6 +752,8 @@ export default function App() {
         /* Optional last-opened preference. */
       }
       setProject(null);
+      setReturnViews([]);
+      setRestoreLocation(null);
       exitFullscreen();
       releasePdfs();
       setProjects(await listProjects());
@@ -815,8 +861,7 @@ export default function App() {
           onSubmit={(e) => {
             e.preventDefault();
             const n = Number(jump);
-            if (Number.isInteger(n) && n >= 1 && n <= project.pages.length)
-              update((p) => ({ ...p, currentPage: n - 1 }));
+            if (Number.isInteger(n) && n >= 1 && n <= project.pages.length) jumpToPage(n - 1);
             else setJump(String(project.currentPage + 1));
           }}
         >
@@ -836,18 +881,22 @@ export default function App() {
         >
           <ChevronRight size={18} />
         </IconButton>
+        <IconButton label="ここを覚える" onClick={rememberView}>
+          <BookmarkPlus size={18} />
+        </IconButton>
       </div>
       <div className="zoom-control">
         <select
           aria-label="ページ表示"
           title="ページ表示"
           value={preferences.pageMode}
-          onChange={(e) =>
+          onChange={(e) => {
+            setRestoreLocation(null);
             setPreferences((p) => ({
               ...p,
               pageMode: e.target.value === 'single' ? 'single' : 'continuous',
-            }))
-          }
+            }));
+          }}
         >
           <option value="continuous">連続</option>
           <option value="single">1ページずつ</option>
@@ -942,6 +991,13 @@ export default function App() {
             });
         }}
       />
+      <input
+        hidden
+        type="file"
+        ref={projectFile.inputRef}
+        aria-label="Lecternプロジェクトファイル"
+        onChange={projectFile.readInput}
+      />
       {!project ? (
         <>
           <aside className="library-nav">
@@ -1012,8 +1068,11 @@ export default function App() {
                 </span>
               </div>
               <div className="action-group">
-                <button className="secondary" onClick={() => backupInput.current?.click()}>
+                <button className="text-button" onClick={() => backupInput.current?.click()}>
                   <Upload size={17} /> バックアップを復元
+                </button>
+                <button className="secondary" onClick={projectFile.chooseFile}>
+                  <FolderOpen size={17} /> プロジェクトを開く
                 </button>
                 <button
                   className="primary"
@@ -1192,13 +1251,27 @@ export default function App() {
               {saveIssue ? (
                 failedSaveButton
               ) : (
-                <span className={`save-status ${saved ? '' : 'saving'}`}>
+                <span
+                  className={`save-status ${saved ? '' : 'saving'}`}
+                  title="この端末のライブラリへの自動保存"
+                >
                   {saved ? <Check size={14} /> : <Loader2 size={14} className="spin" />}
                   {saved ? '保存済み' : '保存中'}
                 </span>
               )}
               <div className="header-end">
                 <UpdateButton beforeReload={beforeReload} />
+                <button
+                  className="secondary"
+                  title="プロジェクトを保存"
+                  aria-label="プロジェクトを保存"
+                  onClick={() => {
+                    if (current.current) projectFile.saveFile(current.current);
+                  }}
+                >
+                  <Save size={17} />
+                  <span>プロジェクトを保存</span>
+                </button>
                 <details className="export-menu">
                   <summary className="secondary">
                     <Download size={17} />
@@ -1593,7 +1666,7 @@ export default function App() {
                         className="page-preview"
                         aria-label={`ページ ${i + 1}`}
                         aria-current={i === project.currentPage ? 'page' : undefined}
-                        onClick={() => update((p) => ({ ...p, currentPage: i }))}
+                        onClick={() => jumpToPage(i)}
                       >
                         <Thumbnail page={pg} shouldPause={inkPriority.isBusy} />
                         <span>
@@ -1642,6 +1715,8 @@ export default function App() {
               {page && (
                 <Stage
                   key={`${project.id}:${preferences.pageMode}`}
+                  captureViewRef={captureViewRef}
+                  restoreLocation={restoreLocation}
                   page={page}
                   continuousPages={
                     preferences.pageMode === 'continuous' ? project.pages : undefined
@@ -1673,6 +1748,19 @@ export default function App() {
                   onNavigate={navigate}
                   onError={setError}
                 />
+              )}
+              {returnPage >= 0 && (
+                <button
+                  type="button"
+                  className="return-view"
+                  data-ink-controls=""
+                  aria-label="直前の表示に戻る"
+                  title={`${returnPage + 1}ページの元の表示に戻る`}
+                  onClick={returnToView}
+                >
+                  <CornerUpLeft size={16} aria-hidden="true" />
+                  {returnPage + 1}ページに戻る
+                </button>
               )}
               {widthRange && (
                 <div className="paper-nib-preview" aria-hidden="true">
@@ -1725,6 +1813,31 @@ export default function App() {
             </footer>
           )}
         </>
+      )}
+      <div role="status" aria-live="polite" className="project-file-notice">
+        {projectFile.fileNotice}
+      </div>
+      {projectFile.conflict && (
+        <Modal title="この端末に同じ資料があります" onClose={projectFile.cancelConflict}>
+          <p>
+            「{projectFile.conflict.local.name}
+            」には、開こうとしているファイルと異なる内容があります。ファイルの内容で開くと、この端末の資料を置き換えます。
+          </p>
+          <dl className="project-versions">
+            <dt>この端末の更新日時</dt>
+            <dd>{new Date(projectFile.conflict.local.updatedAt).toLocaleString('ja-JP')}</dd>
+            <dt>ファイルの更新日時</dt>
+            <dd>{new Date(projectFile.conflict.incoming.updatedAt).toLocaleString('ja-JP')}</dd>
+          </dl>
+          <div className="modal-actions">
+            <button className="secondary" autoFocus onClick={projectFile.cancelConflict}>
+              キャンセル
+            </button>
+            <button className="primary" onClick={projectFile.replaceConflict}>
+              ファイルの内容で開く
+            </button>
+          </div>
+        </Modal>
       )}
       {(error || visibleSaveIssue) && (
         <div className={`error-toast${visibleSaveIssue ? ' save-error' : ''}`} role="alert">
@@ -1883,6 +1996,7 @@ export default function App() {
               className="danger-button"
               onClick={() => {
                 const id = dialog.id;
+                setReturnViews((entries) => entries.filter((entry) => entry.pageId !== id));
                 update((p) => {
                   const pages = p.pages.filter((pg) => pg.id !== id);
                   return { ...p, pages, currentPage: clamp(p.currentPage, 0, pages.length - 1) };
@@ -1902,6 +2016,10 @@ export default function App() {
             <p>
               Pencilまたはマウスで筆記。指1本は移動とページ送り、2本指はピンチで拡大縮小。「入力設定」で指による筆記も有効にできます。「選択」で筆記を囲むかタップすると、枠と操作メニューが出ます。枠内をドラッグすると移動、右下の角をドラッグすると拡大・縮小できます。コピーした筆記は同じタブ内の別ページにも貼り付けられます。消しゴムは上部でサイズを選び、円が通った部分だけを消します。PDF本体は消えません。
             </p>
+            <h3>説明していた場所に戻る</h3>
+            <p>
+              ページ一覧やページ番号で別のページへ飛ぶと、用紙の左下に「○ページに戻る」が出ます。タップすると、元の倍率で同じ箇所に戻れます。スクロールで移動するときは、先にページ番号の横の「ここを覚える」を押してください。
+            </p>
             <h3>動画で伝える</h3>
             <p>
               中央の ▶
@@ -1909,13 +2027,15 @@ export default function App() {
             </p>
             <h3>安心して保存するために</h3>
             <p>
-              PDF・筆記・動画配置をこのブラウザのIndexedDBに自動保存します。ブラウザのデータ消去や容量不足で失われる場合があります。大切な教材は「編集可能なバックアップ」を定期的に保存してください。WindowsからiPadへの移行にも、このZIPを使います。別ブラウザ・別URLとは共有されません。
+              作業中の資料はこの端末のライブラリに自動保存します。WindowsからiPadへ引き継ぐときは「プロジェクトを保存」で
+              .lectern
+              ファイルをOneDriveなどの共有フォルダに置き、iPadのライブラリで「プロジェクトを開く」を押します。授業後はiPadでもう一度ファイルに保存します。以前のZIPは「バックアップを復元」から開けます。
             </p>
             <h3>PDFの書き出し</h3>
             <p>
               元のPDFの文字・図を保って筆記を重ね、動画は再生リンク付きの枠として書き出します。対応端末では「書き出す
               →
-              PDFファイルを共有」からPDFそのものを渡せます。保存したPDFは「ファイル」アプリからも共有できます。再編集にはバックアップZIPを使ってください。
+              PDFファイルを共有」からPDFそのものを渡せます。保存したPDFは「ファイル」アプリからも共有できます。別の端末でも編集を続けるには「プロジェクトを保存」を使ってください。
             </p>
             <h3>講義と画面ミラーリング</h3>
             <p>
