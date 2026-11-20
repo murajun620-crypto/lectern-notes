@@ -85,6 +85,87 @@ test('defaults to continuous pages, scrolls between sheets and lets ink follow a
   await expect(page.locator('.stack-board')).toHaveCount(0);
 });
 
+test('Ctrl+wheel zooms the PDF around the cursor while the editor layout stays fixed', async ({
+  page,
+}) => {
+  await demo(page);
+  const zoom = page.getByLabel('表示倍率');
+  await zoom.selectOption('3');
+  const paper = page.getByTestId('pdf-page');
+  const before = (await paper.boundingBox())!;
+  const pointer = {
+    x: Math.round(before.x + before.width * 0.56),
+    y: Math.round(before.y + before.height * 0.56),
+  };
+  const layout = () =>
+    page.evaluate(() => ({
+      browser: [innerWidth, innerHeight, devicePixelRatio, visualViewport?.scale],
+      editor: ['.editor-header', '.toolbar', '.page-sidebar', '[data-testid=stage]'].map(
+        (selector) => document.querySelector(selector)!.getBoundingClientRect().toJSON(),
+      ),
+    }));
+  const initialLayout = await layout();
+  const readZoom = async () => Number(await zoom.inputValue());
+  const zoomWithWheel = async (deltaY: number) => {
+    await page.keyboard.down('Control');
+    try {
+      await page.mouse.wheel(0, deltaY);
+    } finally {
+      await page.keyboard.up('Control');
+    }
+  };
+  const expectAnchor = async () => {
+    const after = (await paper.boundingBox())!;
+    const x = after.x + ((pointer.x - before.x) / before.width) * after.width;
+    const y = after.y + ((pointer.y - before.y) / before.height) * after.height;
+    expect(Math.abs(x - pointer.x)).toBeLessThan(1);
+    expect(Math.abs(y - pointer.y)).toBeLessThan(1);
+  };
+
+  await page.mouse.move(pointer.x, pointer.y);
+  await zoomWithWheel(-120);
+  await expect.poll(readZoom).toBeGreaterThan(3);
+  expect((await paper.boundingBox())!.width).toBeGreaterThan(before.width);
+  await expectAnchor();
+  expect(await layout()).toEqual(initialLayout);
+
+  const larger = await readZoom();
+  await zoomWithWheel(120);
+  await expect.poll(readZoom).toBeLessThan(larger);
+  await expectAnchor();
+  expect(await layout()).toEqual(initialLayout);
+
+  const panStart = (await paper.boundingBox())!;
+  const panZoom = await readZoom();
+  await page.mouse.wheel(0, 80);
+  await expect.poll(async () => (await paper.boundingBox())!.y).toBeLessThan(panStart.y - 40);
+  expect(await readZoom()).toBe(panZoom);
+  expect(await layout()).toEqual(initialLayout);
+});
+
+test('the PDF cancels the browser default for a touchpad pinch wheel event', async ({ page }) => {
+  await demo(page);
+  const zoom = page.getByLabel('表示倍率');
+  const pinchWheel = (deltaY: number) =>
+    page.getByTestId('stage').evaluate((stage, delta) => {
+      const { left, top, width, height } = stage.getBoundingClientRect();
+      const wheel = new WheelEvent('wheel', {
+        bubbles: true,
+        cancelable: true,
+        ctrlKey: true,
+        clientX: left + width / 2,
+        clientY: top + height / 2,
+        deltaY: delta,
+      });
+      stage.dispatchEvent(wheel);
+      return wheel.defaultPrevented;
+    }, deltaY);
+  expect(await pinchWheel(24.5)).toBe(true);
+  await expect(zoom).toHaveValue('1');
+  expect(await pinchWheel(-24.5)).toBe(true);
+  await expect.poll(async () => Number(await zoom.inputValue())).toBeGreaterThan(1);
+});
+
 test('fullscreen enlarges the viewport and keeps the active tool and laser settings', async ({
   page,
   browserName,
@@ -267,19 +348,24 @@ test('continuous page focus keeps the sharp PDF pixels aligned across a touch re
   const cx = stage.x + stage.width / 2;
   const cy = stage.y + stage.height / 2;
   await page.mouse.move(cx, cy);
-  await page.mouse.wheel(0, paper.y + paper.height + 18 - cy - 45);
+  const scroll = paper.y + paper.height + 18 - cy - 45;
+  await page.mouse.wheel(0, scroll);
+  await expect
+    .poll(async () => (await page.getByTestId('pdf-page').boundingBox())!.y)
+    .toBeCloseTo(paper.y - scroll, 0);
   const detail = page.locator('.pdf-detail-surface');
   await expect(detail).toHaveCount(1);
   await expect(detail).toHaveCSS('transform', 'none');
   await expect(page.getByLabel('ページ番号')).toHaveValue('1');
   const previous = detail.locator('canvas');
   await previous.evaluate((canvas) => (canvas.dataset.keep = 'true'));
+  const kept = view.locator('canvas[data-keep]');
+  const start = (await kept.boundingBox())!;
   const a = { identifier: 4, clientX: cx, clientY: cy + 65 };
   const b = { ...a, clientY: a.clientY - 95 };
   await touch(page, 'touchstart', [a]);
   await touch(page, 'touchmove', [b]);
-  const kept = view.locator('canvas[data-keep]');
-  await expect(detail).not.toHaveCSS('transform', 'none');
+  await expect.poll(async () => (await kept.boundingBox())!.y).toBeCloseTo(start.y - 95, 0);
   const before = await kept.boundingBox();
   await touch(page, 'touchend', [], [b]);
   await expect(page.getByLabel('ページ番号')).toHaveValue('2');

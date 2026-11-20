@@ -290,6 +290,48 @@ export default function Stage({
     captureLocation,
     view,
   ]);
+  const continuous = Boolean(stack.active);
+  useEffect(() => {
+    const stage = viewport.current!;
+    const wheel = (event: WheelEvent) => {
+      const current = view.current;
+      if (event.ctrlKey || event.metaKey) {
+        // Cancel browser zoom on the PDF surface, including at the document's zoom limits.
+        event.preventDefault();
+        const box = stage.getBoundingClientRect();
+        const mode = event.deltaMode;
+        const unit =
+          mode === WheelEvent.DOM_DELTA_LINE
+            ? 16
+            : mode === WheelEvent.DOM_DELTA_PAGE
+              ? box.height
+              : 1;
+        const nextZoom = clampPageZoom(current.zoom * Math.exp(-event.deltaY * unit * 0.0016));
+        if (nextZoom === current.zoom) return;
+        const x = event.clientX - box.left - box.width / 2;
+        const y = event.clientY - box.top - box.height / 2;
+        const ratio = nextZoom / current.zoom;
+        beginView();
+        moveView(
+          nextZoom,
+          limit(
+            { x: x + (current.pan.x - x) * ratio, y: y + (current.pan.y - y) * ratio },
+            nextZoom,
+          ),
+        );
+      } else {
+        if (!continuous && current.zoom === 1) return;
+        beginView();
+        moveView(
+          current.zoom,
+          limit({ x: current.pan.x - event.deltaX, y: current.pan.y - event.deltaY }, current.zoom),
+        );
+      }
+      commitSoon();
+    };
+    stage.addEventListener('wheel', wheel, { passive: false });
+    return () => stage.removeEventListener('wheel', wheel);
+  }, [beginView, commitSoon, continuous, limit, moveView, view]);
   const penBusy = inkPriority.isBusy;
   const pdfBusy = useCallback(() => interacting.current || penBusy(), [interacting, penBusy]);
   const stackPdfBusy = useCallback(
@@ -1773,19 +1815,6 @@ export default function Stage({
           up(e, true);
       }}
       onContextMenu={(e) => e.preventDefault()}
-      onWheel={(e) => {
-        beginView();
-        const current = view.current;
-        if (e.ctrlKey || e.metaKey) {
-          const z = clampPageZoom(current.zoom - e.deltaY * 0.005);
-          moveView(z, limit(current.pan, z));
-        } else if (stack.active || current.zoom > 1)
-          moveView(
-            current.zoom,
-            limit({ x: current.pan.x - e.deltaX, y: current.pan.y - e.deltaY }, current.zoom),
-          );
-        commitSoon();
-      }}
     >
       {stack.active && (
         <div ref={stack.paperLayer} className="stack-board" aria-hidden="true">
