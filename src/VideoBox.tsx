@@ -181,6 +181,12 @@ export default function VideoBox({
   const top = (shown.y - visibleBounds.top) * scale;
   const right = left + shown.width * scale;
   const bottom = top + shown.height * scale;
+  // On a small thumbnail the corner handle can cover the central play button.
+  const handleSize = 28;
+  let handleLeft = right - handleSize;
+  if (Math.min(right - left, bottom - top) < 2 * handleSize) {
+    handleLeft = right + 4 + handleSize <= screenWidth ? right + 4 : left - 4 - handleSize;
+  }
   const onScreen = right > 0 && left < screenWidth && bottom > 0 && top < screenHeight;
   const alignX = (width: number) =>
     Math.round(
@@ -490,8 +496,8 @@ export default function VideoBox({
               className="video-resize"
               data-video-control=""
               style={{
-                left: Math.round(clamp(right - 28, 0, screenWidth - 28)),
-                top: Math.round(clamp(bottom - 28, 0, screenHeight - 28)),
+                left: Math.round(clamp(handleLeft, 0, screenWidth - handleSize)),
+                top: Math.round(clamp(bottom - handleSize, 0, screenHeight - handleSize)),
               }}
               hidden={collapsed}
               title="動画のサイズ変更"
