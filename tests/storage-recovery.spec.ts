@@ -139,10 +139,18 @@ test('a quota failure keeps changes in the editor and exports the current ink an
   const pdf = await zip.file(`assets/${project.pages[0].assetId}.pdf`)!.async('uint8array');
   expect(Buffer.from(pdf.subarray(0, 5)).toString()).toBe('%PDF-');
   expect(await strokeCount(page)).toBe(0);
-  await page.evaluate(() => {
-    window.storageTest.failure = '';
+  const retry = page.getByRole('button', { name: '保存を再試行' });
+  // Keep the quota failure active until the retry click, including focus changes after the download.
+  await retry.evaluate((button) => {
+    button.addEventListener(
+      'click',
+      () => {
+        window.storageTest.failure = '';
+      },
+      { once: true, capture: true },
+    );
   });
-  await page.getByRole('button', { name: '保存を再試行' }).click();
+  await retry.click();
   await expect(page.getByText('保存済み', { exact: true })).toBeVisible();
   await expect(alert).toBeHidden();
   expect(await page.evaluate(() => window.storageTest.pdfWrites)).toBe(1);
