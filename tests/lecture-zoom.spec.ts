@@ -381,7 +381,25 @@ test('video placement and inline player stay aligned after compositor zoom', asy
   await page.route('https://www.youtube.com/iframe_api', (route) =>
     route.fulfill({
       contentType: 'application/javascript',
-      body: `window.YT={Player:class{constructor(el,o){this.iframe=document.createElement('iframe');this.iframe.src='about:blank';el.replaceWith(this.iframe);window.__playerCount=(window.__playerCount||0)+1;setTimeout(()=>o.events.onReady(),20);}playVideo(){}getIframe(){return this.iframe;}destroy(){this.iframe.remove();}}};window.onYouTubeIframeAPIReady();`,
+      body: `
+        window.YT = { Player: class {
+          constructor(el, options) {
+            this.muted = false;
+            this.iframe = document.createElement('iframe');
+            this.iframe.src = 'about:blank';
+            el.replaceWith(this.iframe);
+            window.__playerCount = (window.__playerCount || 0) + 1;
+            setTimeout(() => options.events.onReady({ target: this }), 20);
+          }
+          mute() { this.muted = true; }
+          unMute() { this.muted = false; }
+          isMuted() { return this.muted; }
+          playVideo() {}
+          getIframe() { return this.iframe; }
+          destroy() { this.iframe.remove(); }
+        } };
+        window.onYouTubeIframeAPIReady();
+      `,
     }),
   );
   await demo(page);

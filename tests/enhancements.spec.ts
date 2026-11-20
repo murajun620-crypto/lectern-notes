@@ -76,7 +76,25 @@ async function mockYoutube(page: Page) {
   await page.route('https://www.youtube.com/iframe_api', (route) =>
     route.fulfill({
       contentType: 'application/javascript',
-      body: `window.YT={Player:class{constructor(el,o){this.iframe=document.createElement('iframe');this.iframe.src='about:blank';el.replaceWith(this.iframe);setTimeout(()=>o.events.onReady(),20);this.iframe.addEventListener('mock-ended',()=>o.events.onStateChange({data:0}));}playVideo(){}getIframe(){return this.iframe;}destroy(){this.iframe.remove();}}};window.onYouTubeIframeAPIReady();`,
+      body: `
+        window.YT = { Player: class {
+          constructor(el, options) {
+            this.muted = false;
+            this.iframe = document.createElement('iframe');
+            this.iframe.src = 'about:blank';
+            el.replaceWith(this.iframe);
+            setTimeout(() => options.events.onReady({ target: this }), 20);
+            this.iframe.addEventListener('mock-ended', () => options.events.onStateChange({ data: 0 }));
+          }
+          mute() { this.muted = true; }
+          unMute() { this.muted = false; }
+          isMuted() { return this.muted; }
+          playVideo() {}
+          getIframe() { return this.iframe; }
+          destroy() { this.iframe.remove(); }
+        } };
+        window.onYouTubeIframeAPIReady();
+      `,
     }),
   );
 }
@@ -1626,11 +1644,15 @@ test('collapsed videos retain their placement and play silently until the player
       body: `
         window.YT = { Player: class {
           constructor(el, options) {
+            this.muted = false;
             this.iframe = document.createElement('iframe');
             this.iframe.src = 'about:blank';
             el.replaceWith(this.iframe);
             this.iframe.addEventListener('mock-error', () => options.events.onError({ data: 150 }));
           }
+          mute() { this.muted = true; }
+          unMute() { this.muted = false; }
+          isMuted() { return this.muted; }
           destroy() { this.iframe.remove(); }
         } };
         window.onYouTubeIframeAPIReady();

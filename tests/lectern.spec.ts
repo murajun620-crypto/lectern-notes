@@ -225,7 +225,33 @@ test('YouTube placement controls appear on selection and stay available in fulls
   await page.route('https://www.youtube.com/iframe_api', (route) =>
     route.fulfill({
       contentType: 'application/javascript',
-      body: `window.YT={Player:class{constructor(el,o){this.iframe=document.createElement('iframe');this.iframe.src='about:blank';el.replaceWith(this.iframe);window.__ytOptions={videoId:o.videoId,playerVars:o.playerVars};setTimeout(()=>o.events.onReady(),20);window.__ytError=()=>o.events.onError({data:150});}playVideo(){window.__played=true;}getIframe(){return this.iframe;}destroy(){this.iframe.remove();}}};window.onYouTubeIframeAPIReady();`,
+      body: `
+        window.__ytAudioLog = [];
+        window.YT = { Player: class {
+          constructor(el, options) {
+            this.muted = false;
+            this.iframe = document.createElement('iframe');
+            this.iframe.src = 'about:blank';
+            el.replaceWith(this.iframe);
+            window.__ytOptions = { videoId: options.videoId, playerVars: options.playerVars };
+            setTimeout(() => options.events.onReady({ target: this }), 20);
+            window.__ytError = () => options.events.onError({ data: 150 });
+          }
+          mute() {
+            this.muted = true;
+            window.__ytAudioLog.push('mute');
+          }
+          unMute() {
+            this.muted = false;
+            window.__ytAudioLog.push('unmute');
+          }
+          isMuted() { return this.muted; }
+          playVideo() { window.__ytAudioLog.push(this.muted ? 'play:muted' : 'play:audible'); }
+          getIframe() { return this.iframe; }
+          destroy() { this.iframe.remove(); }
+        } };
+        window.onYouTubeIframeAPIReady();
+      `,
     }),
   );
   await demo(page);
@@ -249,9 +275,10 @@ test('YouTube placement controls appear on selection and stay available in fulls
   await page.mouse.down();
   await page.mouse.move(r.x + 80, r.y + 30, { steps: 6 });
   await page.mouse.up();
-  await saved(page);
+  await expect
+    .poll(async () => (await stored(page))[0].pages[0].videos[0].x)
+    .toBeGreaterThan(before.x);
   const after = (await stored(page))[0].pages[0].videos[0];
-  expect(after.x).toBeGreaterThan(before.x);
   expect(after.y).toBeGreaterThan(before.y);
   const resize = (await page.getByTitle('動画のサイズ変更').boundingBox())!;
   await page.mouse.move(resize.x + 10, resize.y + 10);
@@ -279,18 +306,37 @@ test('YouTube placement controls appear on selection and stay available in fulls
     'true',
   );
   await expect(handle).toHaveCount(0);
-  await page.getByRole('button', { name: '動画をページ内で再生' }).click();
+  const play = page.getByRole('button', { name: '動画をページ内で再生' });
+  const close = page.getByTitle('動画を閉じる', { exact: true });
+  const unmute = page.getByRole('button', { name: '動画のミュートを解除', exact: true });
+  const mute = page.getByRole('button', { name: '動画をミュート', exact: true });
+  const audioLog = () =>
+    page.evaluate(() => (window as Window & { __ytAudioLog: string[] }).__ytAudioLog);
+  await play.click();
   await expect(handle).toHaveCount(0);
   await expect(page.getByTitle('YouTube動画', { exact: true })).toBeVisible();
   expect(await page.evaluate(() => (window as any).__ytOptions.playerVars.playsinline)).toBe(1);
-  expect(await page.evaluate(() => (window as any).__played)).toBe(true);
+  await expect.poll(audioLog).toEqual(['mute', 'play:muted']);
+
+  await unmute.click();
+  await expect(mute).toBeVisible();
+  await mute.click();
+  await unmute.click();
+  await expect(mute).toBeVisible();
+  await close.click();
+  await play.click();
+  await expect(unmute).toBeVisible();
+  await expect
+    .poll(audioLog)
+    .toEqual(['mute', 'play:muted', 'unmute', 'mute', 'unmute', 'mute', 'play:muted']);
+
   await page.evaluate(() => (window as any).__ytError());
   await expect(page.getByText('この動画は埋め込み再生が許可されていません。')).toBeVisible();
   await expect(page.getByRole('link', { name: 'YouTubeで開く' })).toHaveAttribute(
     'target',
     '_blank',
   );
-  await page.getByTitle('動画を閉じる').click();
+  await close.click();
   await expect(handle).toHaveCount(0);
   const thumbnail = box.getByRole('button', { name: 'サムネイルを選択', exact: true });
   await thumbnail.click({ position: { x: 3, y: 3 } });

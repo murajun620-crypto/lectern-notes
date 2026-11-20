@@ -12,6 +12,8 @@ import {
   RotateCw,
   PanelTopClose,
   PanelTopOpen,
+  Volume2,
+  VolumeX,
 } from 'lucide-react';
 import type { Video, Page } from './model';
 import { clamp } from './model';
@@ -28,12 +30,15 @@ export type PlaybackActions = {
   enlarged: boolean;
   canResize: boolean;
   toggleSize: () => void;
+  muted: boolean | null;
+  toggleMute: () => void;
   close: () => void;
 };
 export type RegisterPlayback = (key: string, actions: PlaybackActions | null) => void;
 
 export function PlaybackButtons({ actions }: { actions: PlaybackActions }) {
-  const { enlarged, canResize, toggleSize, close } = actions;
+  const { enlarged, canResize, toggleSize, muted, toggleMute, close } = actions;
+  const audioLabel = muted ? '動画のミュートを解除' : '動画をミュート';
   return (
     <>
       {canResize && (
@@ -43,6 +48,11 @@ export function PlaybackButtons({ actions }: { actions: PlaybackActions }) {
           onClick={toggleSize}
         >
           {enlarged ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+        </button>
+      )}
+      {muted !== null && (
+        <button type="button" title={audioLabel} aria-label={audioLabel} onClick={toggleMute}>
+          {muted ? <VolumeX size={18} /> : <Volume2 size={18} />}
         </button>
       )}
       <button
@@ -63,6 +73,9 @@ type Player = {
   destroy(): void;
   playVideo(): void;
   pauseVideo(): void;
+  mute(): void;
+  unMute(): void;
+  isMuted(): boolean;
   getIframe(): HTMLIFrameElement;
 };
 type YT = { Player: new (el: HTMLElement, options: Record<string, unknown>) => Player };
@@ -144,6 +157,7 @@ export default function VideoBox({
   const [enlarged, setEnlarged] = useState(false),
     [error, setError] = useState(''),
     [blocked, setBlocked] = useState(false),
+    [muted, setMuted] = useState<boolean | null>(null),
     [playbackState, setPlaybackState] = useState(-1);
   const box = useRef<HTMLDivElement>(null),
     host = useRef<HTMLDivElement>(null),
@@ -168,6 +182,12 @@ export default function VideoBox({
       : placement;
   const canResize = (enlarged || larger.width > v.width + 0.01) && !error;
   const toggleSize = useCallback(() => setEnlarged((value) => !value), []);
+  const toggleMute = useCallback(() => {
+    if (!player.current || muted === null) return;
+    if (muted) player.current.unMute();
+    else player.current.mute();
+    setMuted(!muted);
+  }, [muted]);
   const close = useCallback(() => onClosePlayback(playbackKey), [playbackKey, onClosePlayback]);
   const compact = shown.width * scale < 180;
   const align =
@@ -199,14 +219,25 @@ export default function VideoBox({
       Math.max(4, screenHeight - editHeight - 4),
     ),
   );
-  const playbackWidth = canResize ? 128 : 84;
+  const audioState = error ? null : muted;
+  const playbackWidth = 84 + (canResize ? 44 : 0) + (audioState !== null ? 44 : 0);
   const playbackHeight = 44;
   const playbackY = top >= playbackHeight + 10 ? top - playbackHeight - 6 : bottom + 6;
   const showLocalPlayback =
-    !!controls && onScreen && playbackY + playbackHeight <= screenHeight - 4;
+    !!controls &&
+    onScreen &&
+    screenWidth >= playbackWidth + 8 &&
+    playbackY + playbackHeight <= screenHeight - 4;
   useEffect(() => {
     if (!playing || showLocalPlayback) return;
-    registerPlayback(playbackKey, { enlarged, canResize, toggleSize, close });
+    registerPlayback(playbackKey, {
+      enlarged,
+      canResize,
+      toggleSize,
+      muted: audioState,
+      toggleMute,
+      close,
+    });
     return () => registerPlayback(playbackKey, null);
   }, [
     playing,
@@ -215,12 +246,15 @@ export default function VideoBox({
     enlarged,
     canResize,
     toggleSize,
+    audioState,
+    toggleMute,
     close,
     registerPlayback,
   ]);
   const startPlayback = () => {
     onDeselect();
     setEnlarged(false);
+    setMuted(null);
     setPlaybackState(-1);
     onPlay();
   };
@@ -235,7 +269,8 @@ export default function VideoBox({
   useEffect(() => {
     if (!playing) return;
     let cancelled = false,
-      timer: ReturnType<typeof setTimeout> | undefined;
+      timer: ReturnType<typeof setTimeout> | undefined,
+      audioPoll: ReturnType<typeof setInterval> | undefined;
     setError('');
     setBlocked(false);
     setPlaybackState(-1);
@@ -258,20 +293,28 @@ export default function VideoBox({
           height: '100%',
           playerVars: { playsinline: 1, controls: 1, rel: 0, origin: location.origin },
           events: {
-            onReady: () => {
+            onReady: ({ target }: { target: Player }) => {
               if (cancelled) return;
               clearTimeout(timer);
-              const iframe = player.current?.getIframe();
+              const iframe = target.getIframe();
               if (iframe) {
                 iframe.title = 'YouTube動画';
                 iframe.allow = 'autoplay; encrypted-media; picture-in-picture; fullscreen';
                 iframe.referrerPolicy = 'strict-origin-when-cross-origin';
               }
-              player.current?.playVideo();
+              target.mute();
+              setMuted(true);
+              target.playVideo();
+              // YouTube has no mute-change event. Reflect changes from its own controls.
+              audioPoll = setInterval(() => {
+                const value = target.isMuted();
+                if (typeof value === 'boolean') setMuted(value);
+              }, 500);
             },
             onError: (e: { data: number }) => {
               if (cancelled) return;
               clearTimeout(timer);
+              clearInterval(audioPoll);
               setError(
                 (
                   {
@@ -304,6 +347,7 @@ export default function VideoBox({
     return () => {
       cancelled = true;
       clearTimeout(timer);
+      clearInterval(audioPoll);
       player.current?.destroy();
       player.current = undefined;
       host.current?.replaceChildren();
@@ -401,7 +445,9 @@ export default function VideoBox({
               width: playbackWidth,
             }}
           >
-            <PlaybackButtons actions={{ enlarged, canResize, toggleSize, close }} />
+            <PlaybackButtons
+              actions={{ enlarged, canResize, toggleSize, muted: audioState, toggleMute, close }}
+            />
           </div>,
           controls,
         )}

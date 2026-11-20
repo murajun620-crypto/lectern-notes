@@ -1891,7 +1891,7 @@ export default function App() {
             {videoError && <p className="field-error">{videoError}</p>}
             <p className="form-note">
               中央の ▶
-              でページ内再生します。サムネイルのほかの部分をタップすると、移動・サイズ変更・折りたたみなどのボタンが出ます。
+              でミュート再生します。音を出すには、再生操作のスピーカーボタンを押します。サムネイルのほかの部分をタップすると、移動・サイズ変更・折りたたみなどのボタンが出ます。
             </p>
             <div className="modal-actions">
               <button type="button" className="secondary" onClick={() => setDialog(null)}>
