@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 import {
   ArrowLeft,
@@ -29,6 +29,7 @@ import {
   Search,
   Settings2,
   Sparkles,
+  Tags,
   Trash2,
   Undo2,
   Upload,
@@ -37,9 +38,10 @@ import {
   CircleHelp,
   HardDrive,
   ArrowUpRight,
+  CircleAlert,
 } from 'lucide-react';
-import type { Page, Project, Stroke, Tool } from './model';
-import { blankPage, clamp, drawStrokes, parseYoutubeUrl, uid } from './model';
+import type { Page, PenKind, Project, Stroke, Tool } from './model';
+import { blankPage, clamp, drawStrokes, isPenKind, parseYoutubeUrl, penKinds, uid } from './model';
 import {
   deleteProject,
   download,
@@ -47,10 +49,19 @@ import {
   importBackup,
   listProjects,
   saveProject,
+  saveProjectWithPdf,
+  setProjectTags,
 } from './storage';
+import { matchesTag, ProjectTagForm, TagFilter } from './ProjectTags';
 import { demoFile, exportPdf, importPdf, releasePdfs, renderPage } from './pdf';
 import Stage from './Stage';
-import { createInkPriority, highlighterWidths, loadInputPreferences, penWidths } from './input';
+import {
+  createInkPriority,
+  highlighterWidths,
+  inkWidthRanges,
+  loadInputPreferences,
+  penWidths,
+} from './input';
 import type { PencilTool } from './input';
 import { createInkControlGuard } from './ink-control-guard';
 import { createPencilDiagnostics } from './pencil-diagnostics';
@@ -198,6 +209,12 @@ const tools: { id: Tool; label: string; icon: ReactNode; key: string }[] = [
   { id: 'select', label: '選択', icon: <MousePointer2 />, key: 'S' },
   { id: 'laser', label: 'レーザー', icon: <Sparkles />, key: 'L' },
 ];
+const penKindLabels: Record<PenKind, string> = {
+  ballpoint: 'ボールペン',
+  fountain: '万年筆',
+  pencil: '鉛筆',
+  brush: '筆ペン',
+};
 const inkPalettes = {
   pen: { label: 'ペン', preference: 'presets', widthPreference: 'penWidth', widths: penWidths },
   highlighter: {
@@ -208,8 +225,10 @@ const inkPalettes = {
   },
 } as const;
 type WritingTool = keyof typeof inkPalettes;
+class EditorSaveError extends Error {}
 type Dialog =
   | { kind: 'rename'; id: string; value: string }
+  | { kind: 'tags'; id: string }
   | { kind: 'delete'; id: string; name: string }
   | { kind: 'deletePage'; id: string }
   | { kind: 'video' }
@@ -220,6 +239,19 @@ export default function App() {
     [project, setProject] = useState<Project | null>(null),
     [initialized, setInitialized] = useState(false);
   const [inkClipboard, setInkClipboard] = useState<Stroke[]>([]);
+  const [subjectFilter, setSubjectFilter] = useState('');
+  const [yearFilter, setYearFilter] = useState('');
+  const tagChoices = useMemo(
+    () => ({
+      subjects: [...new Set(projects.flatMap((p) => (p.subject ? [p.subject] : [])))].sort((a, b) =>
+        a.localeCompare(b, 'ja'),
+      ),
+      years: [...new Set(projects.flatMap((p) => (p.academicYear ? [p.academicYear] : [])))]
+        .sort()
+        .reverse(),
+    }),
+    [projects],
+  );
   const [inkPriority] = useState(createInkPriority);
   const [pencilDiagnostics, setPencilDiagnostics] = useState<PencilDiagnostics | null>(null);
   const [inkControlGuard] = useState(() => createInkControlGuard(inkPriority));
@@ -261,12 +293,19 @@ export default function App() {
   const chooseColor = (choice: number | string) =>
     setColorChoices((current) => ({ ...current, [writingTool]: choice }));
   const widthTool = tool === 'hand' ? pencilTool.current : tool;
-  const toolWidth =
+  const widthPreference =
     widthTool === 'laser'
-      ? preferences.laserWidth
+      ? 'laserWidth'
       : widthTool === 'eraser'
-        ? preferences.eraserWidth
-        : width;
+        ? 'eraserWidth'
+        : palette.widthPreference;
+  const toolWidth = preferences[widthPreference];
+  const setToolWidth = (value: number) =>
+    setPreferences((p) => ({ ...p, [widthPreference]: value }));
+  const inkRange =
+    widthTool === 'laser' || widthTool === 'eraser'
+      ? undefined
+      : inkWidthRanges[palette.widthPreference];
   const widthLabel =
     widthTool === 'laser'
       ? 'レーザーの太さ'
@@ -313,6 +352,8 @@ export default function App() {
     [busy, setBusy] = useState(''),
     [error, setError] = useState(''),
     [saved, setSaved] = useState(true),
+    [saveIssue, setSaveIssue] = useState(''),
+    [showSaveIssue, setShowSaveIssue] = useState(false),
     [query, setQuery] = useState(''),
     [jump, setJump] = useState('1');
   const [videoUrl, setVideoUrl] = useState(''),
@@ -320,7 +361,8 @@ export default function App() {
   const input = useRef<HTMLInputElement>(null),
     backupInput = useRef<HTMLInputElement>(null),
     append = useRef(false),
-    current = useRef(project);
+    current = useRef(project),
+    savedSnapshot = useRef<Project | null>(null);
   useLayoutEffect(() => {
     current.current = project;
   }, [project]);
@@ -330,9 +372,11 @@ export default function App() {
   const persist = useCallback(
     (p: Project, automatic = false) => {
       const write = queue.current.then(async () => {
+        if (savedSnapshot.current === p) return true;
         // An earlier write can keep an autosave queued until the Pencil is down again.
         if (automatic && (current.current !== p || inkPriority.isBusy())) return false;
         await saveProject(p);
+        savedSnapshot.current = p;
         return true;
       });
       queue.current = write.then(
@@ -341,35 +385,53 @@ export default function App() {
       );
       return write
         .then((written) => {
-          if (written && current.current === p) setSaved(true);
+          if (written && current.current === p) {
+            setSaved(true);
+            setSaveIssue('');
+          }
           return written;
         })
         .catch((e) => {
-          setSaved(false);
-          setError(
-            `保存できません。空き容量を確認し、バックアップを保存してください。${(e as Error).message}`,
-          );
-          throw e;
+          const message = (e as Error).message;
+          if (current.current?.id === p.id) {
+            setSaved(false);
+            setSaveIssue(message);
+            setShowSaveIssue(true);
+          }
+          throw new EditorSaveError(message, { cause: e });
         });
     },
     [inkPriority],
   );
+  const flush = useCallback(async () => {
+    while (current.current && current.current !== savedSnapshot.current) {
+      await persist(current.current);
+    }
+  }, [persist]);
   useEffect(() => {
     void listProjects()
       .then((items) => {
         setProjects(items);
         try {
           const last = items.find((p) => p.id === localStorage.getItem('lectern.active'));
-          if (last) setProject(last);
+          if (last) {
+            savedSnapshot.current = last;
+            setProject(last);
+          }
         } catch {
           /* IndexedDB is still usable when localStorage is blocked. */
         }
       })
-      .catch(() => setError('保存領域を開けません。Safariの通常ブラウズで開き直してください。'))
+      .catch((e) => setError((e as Error).message))
       .finally(() => setInitialized(true));
   }, []);
   useEffect(() => {
     if (!project) return;
+    if (project === savedSnapshot.current) {
+      setSaved(true);
+      setSaveIssue('');
+      return;
+    }
     setSaved(false);
     let stopped = false;
     const autosave = () => {
@@ -392,15 +454,28 @@ export default function App() {
     };
   }, [project, persist, inkPriority]);
   useEffect(() => {
-    const flush = () => {
-      if (document.visibilityState === 'hidden' && current.current) {
-        clearTimeout(saveTimer.current);
-        void persist(current.current).catch(() => {});
-      }
+    const saveOnTransition = () => {
+      void flush().catch(() => {});
     };
-    document.addEventListener('visibilitychange', flush);
-    return () => document.removeEventListener('visibilitychange', flush);
-  }, [persist]);
+    document.addEventListener('visibilitychange', saveOnTransition);
+    window.addEventListener('pagehide', saveOnTransition);
+    window.addEventListener('pageshow', saveOnTransition);
+    return () => {
+      document.removeEventListener('visibilitychange', saveOnTransition);
+      window.removeEventListener('pagehide', saveOnTransition);
+      window.removeEventListener('pageshow', saveOnTransition);
+    };
+  }, [flush]);
+  useEffect(() => {
+    if (saved) return;
+    const warn = (event: BeforeUnloadEvent) => {
+      if (!current.current || current.current === savedSnapshot.current) return;
+      event.preventDefault();
+      event.returnValue = true;
+    };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [saved]);
   const update = (fn: (p: Project) => Project) => {
     setSaved(false);
     setProject((p) => (p ? { ...fn(p), updatedAt: Date.now() } : p));
@@ -509,6 +584,7 @@ export default function App() {
     try {
       await fn();
     } catch (e) {
+      if (e instanceof EditorSaveError) return;
       setError(
         (e as Error).name === 'PasswordException'
           ? 'パスワード保護を解除したPDFを読み込んでください。'
@@ -521,13 +597,16 @@ export default function App() {
   const open = async (p: Project) => {
     if (current.current) {
       clearTimeout(saveTimer.current);
-      await persist(current.current);
+      await flush();
     }
     try {
       localStorage.setItem('lectern.active', p.id);
     } catch {
       /* Optional last-opened preference. */
     }
+    savedSnapshot.current = p;
+    setSaved(true);
+    setSaveIssue('');
     setProject(p);
     history.current.clear();
     setZoom(1);
@@ -536,9 +615,21 @@ export default function App() {
     void navigator.storage?.persist?.().catch(() => {});
   };
   const newFromPdf = async (file: File, adding = false) => {
-    const pages = await importPdf(file);
+    const { pages, asset } = await importPdf(file);
     if (adding && current.current) {
-      update((p) => ({ ...p, pages: [...p.pages, ...pages], currentPage: p.pages.length }));
+      await flush();
+      const base = current.current;
+      if (!base) return;
+      const appendPages = (p: Project) => ({
+        ...p,
+        pages: [...p.pages, ...pages],
+        currentPage: p.pages.length,
+        updatedAt: Date.now(),
+      });
+      const next = appendPages(base);
+      await saveProjectWithPdf(next, asset);
+      savedSnapshot.current = next;
+      setProject((p) => (p === base ? next : p?.id === base.id ? appendPages(p) : p));
       return;
     }
     const p: Project = {
@@ -549,14 +640,14 @@ export default function App() {
       currentPage: 0,
       pages,
     };
-    await saveProject(p);
+    await saveProjectWithPdf(p, asset);
     await open(p);
   };
   const returnLibrary = () =>
     void run('保存中…', async () => {
       if (current.current) {
         clearTimeout(saveTimer.current);
-        await persist(current.current);
+        await flush();
       }
       try {
         localStorage.removeItem('lectern.active');
@@ -568,17 +659,17 @@ export default function App() {
       releasePdfs();
       setProjects(await listProjects());
     });
-  const backup = () =>
-    project &&
-    void run('バックアップを作成中…', async () => {
-      clearTimeout(saveTimer.current);
-      await persist(project);
-      download(await exportBackup(project), `${project.name}.lecture.zip`);
-    });
+  const backup = () => {
+    const snapshot = current.current;
+    if (snapshot)
+      void run('バックアップを作成中…', async () => {
+        download(await exportBackup(snapshot), `${snapshot.name}.lecture.zip`);
+      });
+  };
   const beforeReload = async () => {
     if (current.current) {
       clearTimeout(saveTimer.current);
-      await persist(current.current);
+      await flush();
     }
   };
   const exportDocument = () =>
@@ -631,9 +722,24 @@ export default function App() {
     setTool('hand');
   };
   const h = page ? history.current.get(page.id) : undefined;
-  const visibleProjects = projects.filter((p) =>
-    p.name.toLowerCase().includes(query.toLowerCase()),
-  );
+  const visibleProjects = useMemo(() => {
+    const term = query.trim().normalize('NFKC').toLowerCase();
+    return projects.filter(
+      (p) =>
+        matchesTag(p.subject, subjectFilter) &&
+        matchesTag(p.academicYear, yearFilter) &&
+        [p.name, p.subject, p.academicYear && `${p.academicYear}年度`].some((v) =>
+          v?.normalize('NFKC').toLowerCase().includes(term),
+        ),
+    );
+  }, [projects, query, subjectFilter, yearFilter]);
+  const filtering = Boolean(query || subjectFilter || yearFilter);
+  const tagging =
+    dialog?.kind === 'tags'
+      ? project?.id === dialog.id
+        ? project
+        : projects.find((p) => p.id === dialog.id)
+      : undefined;
   const pageAndViewControls = project && (
     <>
       <div className="page-navigation">
@@ -722,6 +828,18 @@ export default function App() {
       </div>
     </>
   );
+  const failedSaveButton = (
+    <button
+      type="button"
+      className="save-failed"
+      onClick={() => setShowSaveIssue(true)}
+      title="保存エラーの詳細"
+    >
+      <CircleAlert size={15} />
+      未保存
+    </button>
+  );
+  const visibleSaveIssue = !error && showSaveIssue && saveIssue;
   return (
     <div
       className={`app ${project ? 'editor' : 'library'} ${fullscreen ? 'is-fullscreen' : ''}`}
@@ -827,7 +945,10 @@ export default function App() {
             <div className="library-actions">
               <div className="section-title">
                 <h2>講義資料</h2>
-                <span>{projects.length} 件の資料</span>
+                <span>
+                  {filtering ? `${visibleProjects.length} / ${projects.length}` : projects.length}{' '}
+                  件の資料
+                </span>
               </div>
               <div className="action-group">
                 <button className="secondary" onClick={() => backupInput.current?.click()}>
@@ -845,15 +966,41 @@ export default function App() {
               </div>
             </div>
             {projects.length > 0 && (
-              <label className="search">
-                <Search size={18} />
-                <input
-                  placeholder="資料を検索"
-                  aria-label="資料を検索"
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
+              <div className="library-filters">
+                <label className="search">
+                  <Search size={18} />
+                  <input
+                    placeholder="資料を検索"
+                    aria-label="資料を検索"
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                  />
+                </label>
+                <TagFilter
+                  label="科目"
+                  options={tagChoices.subjects}
+                  value={subjectFilter}
+                  onChange={setSubjectFilter}
                 />
-              </label>
+                <TagFilter
+                  label="年度"
+                  options={tagChoices.years}
+                  value={yearFilter}
+                  onChange={setYearFilter}
+                />
+                {filtering && (
+                  <button
+                    className="text-button"
+                    onClick={() => {
+                      setQuery('');
+                      setSubjectFilter('');
+                      setYearFilter('');
+                    }}
+                  >
+                    絞り込みを解除
+                  </button>
+                )}
+              </div>
             )}
             {!initialized ? (
               <div className="empty-state">
@@ -902,6 +1049,12 @@ export default function App() {
                         <span>{p.pages.length} PAGES</span>
                       </div>
                       <h3>{p.name}</h3>
+                      {(p.subject || p.academicYear) && (
+                        <div className="project-tags">
+                          {p.subject && <span>{p.subject}</span>}
+                          {p.academicYear && <span>{p.academicYear}年度</span>}
+                        </div>
+                      )}
                       <p>
                         {new Date(p.updatedAt).toLocaleDateString('ja-JP')} 更新 <span>·</span>{' '}
                         {p.pages.length}ページ
@@ -912,6 +1065,9 @@ export default function App() {
                         <MoreHorizontal size={20} />
                       </summary>
                       <div className="dropdown">
+                        <button onClick={() => setDialog({ kind: 'tags', id: p.id })}>
+                          <Tags size={16} /> 科目・年度を編集
+                        </button>
                         <button
                           onClick={() => setDialog({ kind: 'rename', id: p.id, value: p.name })}
                         >
@@ -972,10 +1128,14 @@ export default function App() {
                 {project.name}
                 <span>⌄</span>
               </button>
-              <span className={`save-status ${saved ? '' : 'saving'}`}>
-                {saved ? <Check size={14} /> : <Loader2 size={14} className="spin" />}
-                {saved ? '保存済み' : '保存中'}
-              </span>
+              {saveIssue ? (
+                failedSaveButton
+              ) : (
+                <span className={`save-status ${saved ? '' : 'saving'}`}>
+                  {saved ? <Check size={14} /> : <Loader2 size={14} className="spin" />}
+                  {saved ? '保存済み' : '保存中'}
+                </span>
+              )}
               <div className="header-end">
                 <UpdateButton beforeReload={beforeReload} />
                 <details className="export-menu">
@@ -989,6 +1149,9 @@ export default function App() {
                     </button>
                     <button onClick={exportDocument}>
                       <FileText size={17} /> 書き込み入りPDF
+                    </button>
+                    <button onClick={() => setDialog({ kind: 'tags', id: project.id })}>
+                      <Tags size={17} /> 科目・年度を編集
                     </button>
                     <button
                       onClick={() => {
@@ -1038,6 +1201,26 @@ export default function App() {
             </button>
             <div className="toolbar-divider" />
             <div className="ink-settings">
+              {widthTool === 'pen' && (
+                <select
+                  className="pen-kind-select"
+                  aria-label="ペンの種類"
+                  title="ペンの種類"
+                  value={preferences.penStyle ?? 'standard'}
+                  onChange={(e) => {
+                    const choice = e.currentTarget.value;
+                    const penStyle = isPenKind(choice) ? choice : undefined;
+                    setPreferences((p) => ({ ...p, penStyle }));
+                  }}
+                >
+                  <option value="standard">標準ペン</option>
+                  {penKinds.map((kind) => (
+                    <option key={kind} value={kind}>
+                      {penKindLabels[kind]}
+                    </option>
+                  ))}
+                </select>
+              )}
               <label className="color-picker" title={`${palette.label}の色`}>
                 <input
                   type="color"
@@ -1058,36 +1241,57 @@ export default function App() {
                   onClick={() => chooseColor(i)}
                 />
               ))}
-              <label className="width-select">
-                <span
-                  className={`width-preview ${widthTool === 'eraser' ? 'eraser-preview' : ''}`}
-                  style={{
-                    height: widthTool === 'eraser' ? 16 : Math.min(toolWidth, 10),
-                    background:
-                      widthTool === 'eraser' ? '#fff' : widthTool === 'laser' ? '#ff3c3c' : color,
-                  }}
-                />
+              <div
+                className={inkRange ? 'ink-width-control' : 'width-select'}
+                data-ink-tool={inkRange ? writingTool : undefined}
+              >
+                {inkRange ? (
+                  <span
+                    className="nib-preview"
+                    title={`太さの見本（${toolWidth} pt、1 pt を 1 px で表示）`}
+                  >
+                    <span
+                      aria-hidden="true"
+                      className="nib-dot"
+                      style={{ width: toolWidth, height: toolWidth, backgroundColor: color }}
+                    />
+                  </span>
+                ) : (
+                  <span
+                    className={`width-preview ${widthTool === 'eraser' ? 'eraser-preview' : ''}`}
+                    style={{
+                      height: widthTool === 'eraser' ? 16 : Math.min(toolWidth, 10),
+                      background: widthTool === 'eraser' ? '#fff' : '#ff3c3c',
+                    }}
+                  />
+                )}
                 <select
                   aria-label={widthLabel}
                   value={toolWidth}
-                  onChange={(e) =>
-                    widthTool === 'laser'
-                      ? setPreferences((p) => ({ ...p, laserWidth: Number(e.target.value) }))
-                      : widthTool === 'eraser'
-                        ? setPreferences((p) => ({ ...p, eraserWidth: Number(e.target.value) }))
-                        : setPreferences((p) => ({
-                            ...p,
-                            [palette.widthPreference]: Number(e.target.value),
-                          }))
-                  }
+                  onChange={(e) => setToolWidth(Number(e.currentTarget.value))}
                 >
+                  {inkRange && !widthOptions.includes(toolWidth) && (
+                    <option value={toolWidth}>{toolWidth} pt</option>
+                  )}
                   {widthOptions.map((v) => (
                     <option key={v} value={v}>
-                      {v} {widthTool === 'laser' || widthTool === 'eraser' ? 'px' : 'pt'}
+                      {v} {inkRange ? 'pt' : 'px'}
                     </option>
                   ))}
                 </select>
-              </label>
+                {inkRange && (
+                  <input
+                    type="range"
+                    aria-label={`${widthLabel}を調整`}
+                    aria-valuetext={`${toolWidth} pt`}
+                    min={inkRange.min}
+                    max={inkRange.max}
+                    step={0.1}
+                    value={toolWidth}
+                    onChange={(e) => setToolWidth(e.currentTarget.valueAsNumber)}
+                  />
+                )}
+              </div>
             </div>
             <div className="toolbar-spacer" />
             <div className="history-tools">
@@ -1261,16 +1465,20 @@ export default function App() {
                 <PlaybackButtons actions={actions} />
               </div>
             ))}
-            {fullscreen && !documentTools && (
-              <span
-                className="toolbar-save-indicator"
-                role="status"
-                aria-label={saved ? '保存済み' : '保存中'}
-                title={saved ? '保存済み' : '保存中'}
-              >
-                {saved ? <Check size={15} /> : <Loader2 size={15} className="spin" />}
-              </span>
-            )}
+            {fullscreen &&
+              !documentTools &&
+              (saveIssue ? (
+                failedSaveButton
+              ) : (
+                <span
+                  className="toolbar-save-indicator"
+                  role="status"
+                  aria-label={saved ? '保存済み' : '保存中'}
+                  title={saved ? '保存済み' : '保存中'}
+                >
+                  {saved ? <Check size={15} /> : <Loader2 size={15} className="spin" />}
+                </span>
+              ))}
             {fullscreen && (
               <button
                 type="button"
@@ -1357,6 +1565,7 @@ export default function App() {
                   }
                   onFocusPage={focusPage}
                   tool={tool}
+                  penKind={preferences.penStyle}
                   color={color}
                   width={width}
                   laserWidth={preferences.laserWidth}
@@ -1424,10 +1633,19 @@ export default function App() {
           )}
         </>
       )}
-      {error && (
-        <div className="error-toast" role="alert">
-          <span>{error}</span>
-          <IconButton label="エラーを閉じる" onClick={() => setError('')}>
+      {(error || visibleSaveIssue) && (
+        <div className={`error-toast${visibleSaveIssue ? ' save-error' : ''}`} role="alert">
+          <span>{error || saveIssue}</span>
+          {visibleSaveIssue && (
+            <div className="save-error-actions">
+              <button onClick={() => void run('保存中…', flush)}>保存を再試行</button>
+              <button onClick={backup}>バックアップを書き出す</button>
+            </div>
+          )}
+          <IconButton
+            label="エラーを閉じる"
+            onClick={() => (error ? setError('') : setShowSaveIssue(false))}
+          >
             <X size={18} />
           </IconButton>
         </div>
@@ -1473,6 +1691,29 @@ export default function App() {
               </button>
             </div>
           </form>
+        </Modal>
+      )}
+      {tagging && (
+        <Modal title="科目・年度を編集" onClose={() => setDialog(null)}>
+          <ProjectTagForm
+            project={tagging}
+            {...tagChoices}
+            onCancel={() => setDialog(null)}
+            onSave={async (tags) => {
+              const active = current.current;
+              if (active?.id === tagging.id) {
+                const next = { ...active, ...tags, updatedAt: Date.now() };
+                // Keep this edit available to retry or back up if the device rejects the write.
+                current.current = next;
+                setProject(next);
+                await persist(next);
+              } else {
+                await setProjectTags(tagging.id, tags);
+                setProjects(await listProjects());
+              }
+              setDialog((open) => (open === dialog ? null : open));
+            }}
+          />
         </Modal>
       )}
       {dialog?.kind === 'rename' && (

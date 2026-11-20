@@ -9,7 +9,7 @@ export type Erasure = { id: string; width: number; points: Point[] };
 export type Stroke = {
   id: string;
   tool: 'pen' | 'highlighter';
-  /** Retained to render strokes written before the pen selector was removed. */
+  /** Omitted for the standard pen. */
   penKind?: PenKind;
   color: string;
   width: number;
@@ -37,6 +37,8 @@ export type Page = {
 export type Project = {
   id: string;
   name: string;
+  subject?: string;
+  academicYear?: string;
   createdAt: number;
   updatedAt: number;
   currentPage: number;
@@ -217,7 +219,7 @@ export function penOutline(stroke: Stroke) {
     }
     return [p.x, p.y, pressure];
   });
-  if (samples.length === 2 || (!penKind && samples.length === 1)) {
+  if (samples.length === 1 || samples.length === 2) {
     // Round caps at the actual contacts also give a stationary tap a centered circular nib.
     const start = samples[0];
     const end = samples.at(-1)!;
@@ -246,11 +248,11 @@ export function penOutline(stroke: Stroke) {
   };
   const path = getStrokePoints(samples, options);
   const tip = path.at(-1);
-  if (!penKind && tip) {
+  if (taper === 0 && tip) {
     // perfect-freehand skips vertices within 3 units of the final runningLength.
     // On a turn this cuts across the last contacts, leaving a thin neck at the
-    // round cap. The standard pen has no taper; offset this cutoff without
-    // moving the tip or changing its direction or pressure.
+    // round cap. Only offset this cutoff for untapered marks; the brush
+    // uses the true length to set the width of its tapered end.
     tip.runningLength += 3;
   }
   return getStrokeOutlinePoints(path, options);

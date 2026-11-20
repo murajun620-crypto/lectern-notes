@@ -56,9 +56,9 @@ export default function UpdateButton({ beforeReload }: { beforeReload: () => Pro
       const url = new URL(location.href);
       url.searchParams.set('v', version.version);
       location.replace(url.href);
-    } catch {
+    } catch (e) {
       setError(
-        '教材の保存に失敗したため、更新を中止しました。バックアップを保存し、空き容量を確認してください。',
+        `更新を中止しました。${e instanceof Error ? e.message : '教材の保存に失敗しました。'}`,
       );
       setPhase('error');
     }

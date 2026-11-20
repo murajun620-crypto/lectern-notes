@@ -1,7 +1,7 @@
 import * as pdfjs from 'pdfjs-dist';
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import { PDFDocument, PDFName, PDFString, StandardFonts, rgb } from 'pdf-lib';
-import { getAsset, putAsset } from './storage';
+import { getAsset } from './storage';
 import { drawStrokes, uid } from './model';
 import type { Page, Project } from './model';
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
@@ -32,7 +32,7 @@ export function releasePdfs() {
   for (const promise of documents.values()) void promise.then((d) => d.destroy()).catch(() => {});
   documents.clear();
 }
-export async function importPdf(file: File): Promise<Page[]> {
+export async function importPdf(file: File) {
   if (file.size > 300 * 1024 * 1024) throw new Error('PDFは300 MB以下にしてください。');
   const data = await file.arrayBuffer();
   const doc = await pdfjs.getDocument({ data: data.slice(0), isEvalSupported: false }).promise;
@@ -54,8 +54,7 @@ export async function importPdf(file: File): Promise<Page[]> {
       });
       page.cleanup();
     }
-    await putAsset(id, data);
-    return pages;
+    return { pages, asset: { id, data } };
   } catch (e) {
     if ((e as Error).name === 'PasswordException')
       throw new Error('パスワード保護を解除したPDFを読み込んでください。');

@@ -1,4 +1,5 @@
-import type { Tool } from './model';
+import { isPenKind } from './model';
+import type { PenKind, Tool } from './model';
 
 /** Leave a short window between letters for the next stroke to take priority. */
 export function createInkPriority() {
@@ -23,6 +24,10 @@ export type InkPriority = ReturnType<typeof createInkPriority>;
 export type PencilTool = Exclude<Tool, 'hand'>;
 export const penWidths = [1, 2.5, 4, 7, 10];
 export const highlighterWidths = [5, 12.5, 20, 35, 50];
+export const inkWidthRanges = {
+  penWidth: { min: 0.5, max: 10 },
+  highlighterWidth: { min: 1, max: 50 },
+} as const;
 export type InputPreferences = {
   fingerInk: boolean;
   pencilPressure: boolean;
@@ -32,6 +37,7 @@ export type InputPreferences = {
   pageMode: 'continuous' | 'single';
   presets: string[];
   highlighterPresets: string[];
+  penStyle?: PenKind;
   penWidth: number;
   highlighterWidth: number;
   laserWidth: number;
@@ -51,6 +57,12 @@ export const defaultInputPreferences: InputPreferences = {
   laserWidth: 4,
   eraserWidth: 28,
 };
+function readInkWidth(value: unknown, key: keyof typeof inkWidthRanges): number {
+  const { min, max } = inkWidthRanges[key];
+  return typeof value === 'number' && value >= min && value <= max
+    ? Math.round(value * 10) / 10
+    : defaultInputPreferences[key];
+}
 function readPresets(value: unknown, fallback: string[]): string[] {
   return Array.isArray(value) &&
     value.length === 3 &&
@@ -69,10 +81,9 @@ export function loadInputPreferences(): InputPreferences {
       twoFingerTap: p.twoFingerTap !== false,
       showFooter: p.showFooter !== false,
       pageMode: p.pageMode === 'single' ? 'single' : 'continuous',
-      penWidth: penWidths.includes(p.penWidth) ? p.penWidth : defaultInputPreferences.penWidth,
-      highlighterWidth: highlighterWidths.includes(p.highlighterWidth)
-        ? p.highlighterWidth
-        : defaultInputPreferences.highlighterWidth,
+      penStyle: isPenKind(p.penStyle) ? p.penStyle : undefined,
+      penWidth: readInkWidth(p.penWidth, 'penWidth'),
+      highlighterWidth: readInkWidth(p.highlighterWidth, 'highlighterWidth'),
       laserWidth: [2, 4, 6, 8, 12].includes(p.laserWidth) ? p.laserWidth : 4,
       eraserWidth: [8, 16, 28, 48, 80].includes(p.eraserWidth) ? p.eraserWidth : 28,
       presets: readPresets(p.presets, defaultInputPreferences.presets),

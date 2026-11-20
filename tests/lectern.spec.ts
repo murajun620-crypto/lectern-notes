@@ -317,6 +317,9 @@ test('backup restore, annotated PDF output and library rename/duplicate/delete',
 }) => {
   await demo(page);
   await line(page);
+  await page.getByLabel('ペンの種類', { exact: true }).selectOption('fountain');
+  await page.getByRole('slider', { name: 'ペンの太さを調整', exact: true }).press('ArrowRight');
+  await line(page, [0.15, 0.58], [0.45, 0.68]);
   await page.getByRole('button', { name: 'YouTube挿入' }).click();
   await page.getByLabel('YouTube URL').fill('https://youtu.be/M7lc1UVf-VE');
   await page.getByRole('button', { name: 'このページに追加' }).click();
@@ -330,8 +333,10 @@ test('backup restore, annotated PDF output and library rename/duplicate/delete',
   const meta = JSON.parse(await zip.file('project.json')!.async('string'));
   expect(meta.version).toBe(2);
   expect(meta.project.pages).toHaveLength(3);
-  expect(meta.project.pages[0].strokes).toHaveLength(1);
+  expect(meta.project.pages[0].strokes).toHaveLength(2);
   expect(meta.project.pages[0].strokes[0]).not.toHaveProperty('penKind');
+  const fountain = meta.project.pages[0].strokes[1];
+  expect(fountain).toMatchObject({ penKind: 'fountain', width: 2.6 });
   expect(meta.project.pages[0].videos).toHaveLength(1);
   expect(Object.keys(zip.files).some((name) => name.endsWith('.pdf'))).toBe(true);
   await page.locator('.export-menu>summary').click();
@@ -346,7 +351,7 @@ test('backup restore, annotated PDF output and library rename/duplicate/delete',
   const chooser = page.waitForEvent('filechooser');
   await page.getByRole('button', { name: 'バックアップを復元' }).click();
   const legacyStroke = { ...meta.project.pages[0].strokes[0], penKind: 'pencil' };
-  meta.project.pages[0].strokes = [legacyStroke];
+  meta.project.pages[0].strokes[0] = legacyStroke;
   zip.file('project.json', JSON.stringify({ ...meta, version: 1 }));
   await (
     await chooser
@@ -359,8 +364,8 @@ test('backup restore, annotated PDF output and library rename/duplicate/delete',
   await saved(page);
   const restored = await stored(page);
   expect(restored).toHaveLength(2);
-  expect(restored.map((project) => project.pages[0].strokes[0])).toEqual(
-    expect.arrayContaining([legacyStroke]),
+  expect(restored.map((project) => project.pages[0].strokes)).toEqual(
+    expect.arrayContaining([[legacyStroke, fountain]]),
   );
   await page.getByRole('button', { name: 'ライブラリに戻る' }).click();
   await page.locator('.card-menu>summary').first().click();

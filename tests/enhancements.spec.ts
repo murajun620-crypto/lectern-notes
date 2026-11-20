@@ -835,17 +835,26 @@ test.describe('Pencil contact samples', () => {
         localStorage.setItem('lectern.input', JSON.stringify({ penKind: 'brush' }));
     });
     await demo(page);
-    await expect(page.getByLabel('ペンの種類', { exact: true })).toHaveCount(0);
+    const penKind = page.getByLabel('ペンの種類', { exact: true });
+    await expect(penKind).toHaveValue('standard');
+    await expect(penKind.locator('option')).toHaveText([
+      '標準ペン',
+      'ボールペン',
+      '万年筆',
+      '鉛筆',
+      '筆ペン',
+    ]);
     await page.getByLabel('ペンの太さ', { exact: true }).selectOption('4');
     await page.getByLabel('入力設定', { exact: true }).click();
     await page.getByLabel('Pencilの筆圧で線の太さを変える').check();
     await page.getByLabel('入力設定', { exact: true }).click();
     const stage = page.getByTestId('stage');
     const paper = (await page.getByTestId('pdf-page').boundingBox())!;
-    const rows = 4;
+    const kinds = ['standard', 'ballpoint', 'fountain', 'pencil', 'brush'];
     const x = Math.round(paper.x + paper.width * 0.28);
     const y = Math.round(paper.y + paper.height * 0.35);
-    for (let row = 0; row < rows; row++) {
+    for (const [row, kind] of kinds.entries()) {
+      await penKind.selectOption(kind);
       await stage.evaluate(
         (el, position) => {
           HTMLElement.prototype.setPointerCapture = () => {};
@@ -874,13 +883,14 @@ test.describe('Pencil contact samples', () => {
         { x, y: y + row * 28 },
       );
     }
-    const expected = Array.from({ length: rows }, () => [4, 4, 4, 1]).flat();
+    const expected = kinds.flatMap((kind) =>
+      [4, 4, 4, 1].map((count) => [kind === 'standard' ? undefined : kind, count]),
+    );
     const savedMarks = async () => {
       const project = (await stored(page))[0];
       const strokes = project?.pages[0].strokes as
         { penKind?: string; points: unknown[] }[] | undefined;
-      expect(strokes?.some((s) => s.penKind !== undefined)).not.toBe(true);
-      return strokes?.map((s) => s.points.length);
+      return strokes?.map((s) => [s.penKind, s.points.length]);
     };
     await expect.poll(savedMarks).toEqual(expected);
     const sampleInk = () =>
@@ -906,7 +916,7 @@ test.describe('Pencil contact samples', () => {
           }
           return { marks: Math.min(...marks), afterLift: Math.max(...afterLift) };
         },
-        { x, y, rows },
+        { x, y, rows: kinds.length },
       );
     const checkInk = async () => {
       await expect.poll(async () => (await sampleInk()).marks).toBeGreaterThan(40);
@@ -918,6 +928,7 @@ test.describe('Pencil contact samples', () => {
     await page.getByRole('button', { name: 'やり直す', exact: true }).click();
     await expect.poll(savedMarks).toEqual(expected);
     await page.reload();
+    await expect(penKind).toHaveValue('brush');
     await checkInk();
   });
 
@@ -1360,11 +1371,30 @@ test('iPad-sized layout keeps editing controls and ink palettes in the fullscree
   await expect(page.getByRole('alert')).toHaveCount(0);
   const penWidth = page.getByLabel('ペンの太さ', { exact: true });
   const highlighterWidth = page.getByLabel('蛍光ペンの太さ', { exact: true });
+  const penSlider = page.getByRole('slider', { name: 'ペンの太さを調整', exact: true });
+  const highlighterSlider = page.getByRole('slider', { name: '蛍光ペンの太さを調整', exact: true });
+  const dot = page.locator('.nib-dot');
+  const initialDiameter = (await dot.boundingBox())!.width;
+  const sliderBounds = (await penSlider.boundingBox())!;
+  expect(sliderBounds.x).toBeGreaterThanOrEqual(14);
+  expect(sliderBounds.x + sliderBounds.width).toBeLessThanOrEqual(1010);
+  await penSlider.click({ position: { x: sliderBounds.width * 0.75, y: sliderBounds.height / 2 } });
+  expect(Number(await penWidth.inputValue())).toBeGreaterThan(2.5);
+  await expect(penWidth).toHaveValue(await penSlider.inputValue());
   await penWidth.selectOption('7');
+  await expect(penSlider).toHaveValue('7');
+  await penSlider.press('ArrowRight');
+  await expect(penWidth).toHaveValue('7.1');
+  const largerDot = (await dot.boundingBox())!;
+  expect(largerDot.width).toBeGreaterThan(initialDiameter);
+  expect(largerDot.height).toBeCloseTo(largerDot.width, 1);
   const highlighter = page.getByRole('button', { name: '蛍光ペン', exact: true });
   await highlighter.click();
   await expect(highlighterWidth).toHaveValue('12.5');
   await highlighterWidth.selectOption('35');
+  await expect(highlighterSlider).toHaveValue('35');
+  await highlighterSlider.press('ArrowLeft');
+  await expect(highlighterWidth).toHaveValue('34.9');
   for (const [i, color] of ['#fff200', '#ff45bf', '#a6ff00'].entries()) {
     await expect(swatch('蛍光ペン', i + 1)).toBeVisible();
     await expect(swatch('蛍光ペン', i + 1)).toHaveCSS('--swatch', color);
@@ -1380,11 +1410,11 @@ test('iPad-sized layout keeps editing controls and ink palettes in the fullscree
   };
   await draw(0.4);
   await page.getByRole('button', { name: 'ペン', exact: true }).click();
-  await expect(penWidth).toHaveValue('7');
+  await expect(penWidth).toHaveValue('7.1');
   await expect(swatch('ペン', 2)).toHaveAttribute('aria-pressed', 'true');
   await draw(0.6);
   await highlighter.click();
-  await expect(highlighterWidth).toHaveValue('35');
+  await expect(highlighterWidth).toHaveValue('34.9');
   await expect(swatch('蛍光ペン', 2)).toHaveAttribute('aria-pressed', 'true');
   await expect
     .poll(async () => {
@@ -1398,8 +1428,8 @@ test('iPad-sized layout keeps editing controls and ink palettes in the fullscree
       );
     })
     .toEqual([
-      ['highlighter', '#ff45bf', 35],
-      ['pen', '#00aa55', 7],
+      ['highlighter', '#ff45bf', 34.9],
+      ['pen', '#00aa55', 7.1],
     ]);
   await page.getByLabel('入力設定', { exact: true }).click();
   await changePreset('蛍光ペンのプリセット2の色を変更', '#ff7a20');
@@ -1407,10 +1437,12 @@ test('iPad-sized layout keeps editing controls and ink palettes in the fullscree
   await page.getByLabel('入力設定', { exact: true }).click();
   await page.screenshot({ path: `artifacts/ipad-layout-${browserName}.png` });
   await page.reload();
-  await expect(penWidth).toHaveValue('7');
+  await expect(penWidth).toHaveValue('7.1');
+  await expect(penSlider).toHaveValue('7.1');
   await expect(swatch('ペン', 2)).toHaveCSS('--swatch', '#00aa55');
   await highlighter.click();
-  await expect(highlighterWidth).toHaveValue('35');
+  await expect(highlighterWidth).toHaveValue('34.9');
+  await expect(highlighterSlider).toHaveValue('34.9');
   await expect(swatch('蛍光ペン', 2)).toHaveCSS('--swatch', '#ff7a20');
 });
 

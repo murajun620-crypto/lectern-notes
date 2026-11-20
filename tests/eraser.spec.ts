@@ -56,7 +56,7 @@ test.describe('selection actions', () => {
   }) => {
     await demo(page);
     await page.getByRole('button', { name: '蛍光ペン', exact: true }).tap();
-    await page.getByLabel('蛍光ペンの太さ').selectOption('20');
+    await page.getByLabel('蛍光ペンの太さ', { exact: true }).selectOption('20');
     await line(page, 0.28, 0.39, 0.58, 0.39);
     await page.getByRole('button', { name: '消しゴム', exact: true }).tap();
     await page.getByLabel('消しゴムのサイズ').selectOption('8');

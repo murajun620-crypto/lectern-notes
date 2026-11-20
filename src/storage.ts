@@ -1,40 +1,142 @@
 import { openDB } from 'idb';
+import type { IDBPDatabase, IDBPTransaction } from 'idb';
 import JSZip from 'jszip';
 import { isPenKind, uid } from './model';
 import type { Project, Page } from './model';
 import { videoPlacementBounds } from './video-layout';
 let connection: ReturnType<typeof openDB> | undefined;
-const db = () =>
-  (connection ||= openDB('lectern', 1, {
+function db() {
+  if (connection) return connection;
+  const opened = openDB('lectern', 1, {
     upgrade(db) {
       db.createObjectStore('projects', { keyPath: 'id' });
       db.createObjectStore('assets');
     },
-  }));
+    blocking(_old, _next, event) {
+      (event.target as IDBDatabase).close();
+      forget();
+    },
+    terminated: forget,
+  });
+  function forget() {
+    if (connection === opened) connection = undefined;
+  }
+  connection = opened;
+  void opened.catch(forget);
+  return opened;
+}
+const interrupted = new Set([
+  'AbortError',
+  'InvalidStateError',
+  'UnknownError',
+  'TransactionInactiveError',
+]);
+async function storageError(action: string, e: unknown) {
+  const name = e instanceof Error ? e.name : 'Error';
+  const detail = e instanceof Error ? e.message : String(e);
+  let reason = detail || '詳細を取得できませんでした。';
+  if (name === 'QuotaExceededError') {
+    reason = 'このブラウザの保存容量が不足しています。';
+    try {
+      const estimate = await navigator.storage?.estimate();
+      if (estimate?.usage !== undefined && estimate.quota) {
+        const mib = (bytes: number) =>
+          (bytes / 1048576).toLocaleString('ja-JP', { maximumFractionDigits: 1 });
+        reason += ` サイトの使用量は約${mib(estimate.usage)} MiB、上限は約${mib(estimate.quota)} MiBです。`;
+      }
+    } catch {
+      /* Storage estimates are optional. */
+    }
+  } else if (name === 'SecurityError' || name === 'NotAllowedError') {
+    reason = 'ブラウザがサイトデータへのアクセスを制限しています。';
+  } else if (name === 'DataCloneError') {
+    reason = '教材にブラウザが保存形式へ変換できないデータが含まれています。';
+  } else if (interrupted.has(name)) {
+    reason = `ブラウザの保存処理を完了できませんでした。${detail}`;
+  }
+  return new Error(`${action}。${reason}（${name}）`, { cause: e });
+}
+async function withStorage<T>(
+  action: string,
+  operation: (database: IDBPDatabase) => Promise<T>,
+): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    let active: typeof connection;
+    try {
+      active = db();
+      return await operation(await active);
+    } catch (error) {
+      if (error instanceof Error && interrupted.has(error.name)) {
+        if (connection === active) connection = undefined;
+        await active?.then(
+          (database) => database.close(),
+          () => {},
+        );
+        if (attempt === 0) continue;
+      }
+      throw await storageError(action, error);
+    }
+  }
+}
 export const listProjects = async (): Promise<Project[]> =>
-  (await (await db()).getAll('projects')).sort((a, b) => b.updatedAt - a.updatedAt);
+  (
+    await withStorage('教材一覧を読み込めませんでした', (database) => database.getAll('projects'))
+  ).sort((a, b) => b.updatedAt - a.updatedAt);
 export const saveProject = async (p: Project) => {
-  await (await db()).put('projects', p);
+  await withStorage('教材を保存できませんでした', (database) => database.put('projects', p));
 };
-export const putAsset = async (id: string, data: ArrayBuffer) => {
-  await (await db()).put('assets', data, id);
-};
+function writeTransaction(
+  action: string,
+  stores: string[],
+  write: (tx: IDBPTransaction<unknown, string[], 'readwrite'>) => Promise<void>,
+) {
+  return withStorage(action, async (database) => {
+    const tx = database.transaction(stores, 'readwrite');
+    try {
+      await Promise.all([write(tx), tx.done]);
+    } catch (error) {
+      try {
+        tx.abort();
+      } catch {
+        /* Already aborted by IndexedDB. */
+      }
+      await tx.done.catch(() => {});
+      throw error;
+    }
+  });
+}
+export async function setProjectTags(id: string, tags: Pick<Project, 'subject' | 'academicYear'>) {
+  await writeTransaction('タグを保存できませんでした', ['projects'], async (tx) => {
+    const store = tx.objectStore('projects');
+    const project: Project | undefined = await store.get(id);
+    if (!project) throw new Error('この資料はライブラリにありません。');
+    // The card may predate ink saved from another window.
+    await store.put({ ...project, ...tags, updatedAt: Date.now() });
+  });
+}
+export function saveProjectWithPdf(project: Project, asset: { id: string; data: ArrayBuffer }) {
+  return writeTransaction('PDFと教材を保存できませんでした', ['assets', 'projects'], async (tx) => {
+    await tx.objectStore('assets').put(asset.data, asset.id);
+    await tx.objectStore('projects').put(project);
+  });
+}
 export const getAsset = async (id: string): Promise<ArrayBuffer> => {
-  const a = await (await db()).get('assets', id);
+  const a = await withStorage('元のPDFを読み込めませんでした', (database) =>
+    database.get('assets', id),
+  );
   if (!a) throw new Error('PDFデータが見つかりません。バックアップから復元してください。');
   return a;
 };
 export async function deleteProject(id: string) {
-  const database = await db(),
-    tx = database.transaction(['projects', 'assets'], 'readwrite');
-  await tx.objectStore('projects').delete(id);
-  const projects: Project[] = await tx.objectStore('projects').getAll();
-  const used = new Set(
-    projects.flatMap((p) => p.pages.flatMap((page) => (page.assetId ? [page.assetId] : []))),
-  );
-  for (const key of await tx.objectStore('assets').getAllKeys())
-    if (!used.has(String(key))) await tx.objectStore('assets').delete(key);
-  await tx.done;
+  await writeTransaction('教材を削除できませんでした', ['projects', 'assets'], async (tx) => {
+    await tx.objectStore('projects').delete(id);
+    const projects: Project[] = await tx.objectStore('projects').getAll();
+    const used = new Set(
+      projects.flatMap((p) => p.pages.flatMap((page) => (page.assetId ? [page.assetId] : []))),
+    );
+    for (const key of await tx.objectStore('assets').getAllKeys())
+      if (!used.has(String(key))) await tx.objectStore('assets').delete(key);
+  });
 }
 export function download(blob: Blob, name: string) {
   const url = URL.createObjectURL(blob),
@@ -63,6 +165,10 @@ export function validateProject(p: unknown): asserts p is Project {
     typeof q.name !== 'string' ||
     !q.name.trim() ||
     q.name.length > 200 ||
+    (q.subject !== undefined &&
+      (typeof q.subject !== 'string' || !q.subject.trim() || q.subject.length > 80)) ||
+    (q.academicYear !== undefined &&
+      (typeof q.academicYear !== 'string' || !/^\d{4}$/.test(q.academicYear))) ||
     !Array.isArray(q.pages) ||
     !q.pages.length ||
     q.pages.length > 2000
@@ -199,9 +305,13 @@ export async function importBackup(file: File): Promise<Project> {
       assetId: pg.assetId ? assets.get(pg.assetId) : undefined,
     })),
   };
-  const tx = (await db()).transaction(['assets', 'projects'], 'readwrite');
-  for (const a of pending) await tx.objectStore('assets').put(a.data, a.id);
-  await tx.objectStore('projects').put(restored);
-  await tx.done;
+  await writeTransaction(
+    'バックアップを復元できませんでした',
+    ['assets', 'projects'],
+    async (tx) => {
+      for (const a of pending) await tx.objectStore('assets').put(a.data, a.id);
+      await tx.objectStore('projects').put(restored);
+    },
+  );
   return restored;
 }

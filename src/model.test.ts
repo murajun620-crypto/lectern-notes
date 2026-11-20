@@ -64,6 +64,20 @@ describe('backup validation', () => {
     pages: [blankPage()],
   });
   it('accepts a valid project', () => expect(() => validateProject(valid())).not.toThrow());
+  it('accepts optional subject and academic year tags and rejects malformed fields', () => {
+    expect(() =>
+      validateProject({ ...valid(), subject: '物理学', academicYear: '2026' }),
+    ).not.toThrow();
+    for (const tags of [
+      { subject: [] },
+      { subject: ' ' },
+      { subject: '字'.repeat(81) },
+      { academicYear: 2026 },
+      { academicYear: '20' },
+    ]) {
+      expect(() => validateProject({ ...valid(), ...tags })).toThrow();
+    }
+  });
   it('accepts video placements that extend beyond the paper', () => {
     const p = valid();
     p.pages[0].videos = [
