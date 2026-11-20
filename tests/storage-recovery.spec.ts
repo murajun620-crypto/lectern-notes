@@ -75,6 +75,39 @@ async function strokeCount(page: Page) {
   });
 }
 
+test('a rejected IndexedDB open is retried and a serialization error is diagnosed separately', async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    const open = IDBFactory.prototype.open;
+    let abortFirstOpen = true;
+    IDBFactory.prototype.open = function (...args) {
+      const request = open.apply(this, args);
+      if (args[0] === 'lectern' && abortFirstOpen) {
+        abortFirstOpen = false;
+        request.addEventListener('upgradeneeded', (event) => {
+          event.stopImmediatePropagation();
+          request.transaction!.abort();
+        });
+      }
+      return request;
+    };
+  });
+  await openSample(page);
+  await expect(page.getByRole('alert')).toBeHidden();
+  await page.evaluate(() => {
+    window.storageTest.failure = 'DataCloneError';
+  });
+  await draw(page, 0.3);
+  const alert = page.getByRole('alert');
+  await expect(alert).toContainText('DataCloneError');
+  await expect(alert).not.toContainText('容量');
+  await page.getByRole('button', { name: 'エラーを閉じる' }).click();
+  await expect(alert).toBeHidden();
+  await page.getByRole('button', { name: '未保存', exact: true }).click();
+  await expect(alert).toContainText('保存を再試行');
+});
+
 test('a quota failure keeps changes in the editor and exports the current ink and PDF before a successful retry', async ({
   page,
 }) => {
