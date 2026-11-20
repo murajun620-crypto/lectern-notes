@@ -1,9 +1,11 @@
 import * as pdfjs from 'pdfjs-dist';
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
-import { PDFDocument, PDFName, PDFString, StandardFonts, rgb } from 'pdf-lib';
+import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import { getAsset } from './storage';
-import { drawStrokes, uid } from './model';
+import { uid } from './model';
 import type { Page, Project } from './model';
+import { addPdfLink, drawPdfBackground, readVectorSource } from './pdf-background';
+import { drawPdfInk } from './pdf-ink';
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
 const documents = new Map<string, Promise<pdfjs.PDFDocumentProxy>>();
 export async function getPdf(id: string) {
@@ -107,26 +109,23 @@ export async function renderPage(
 }
 export async function exportPdf(project: Project, progress: (s: string) => void) {
   const doc = await PDFDocument.create();
+  const sources = new Map<string, Awaited<ReturnType<typeof readVectorSource>>>();
+  const lastPage = new Map<string, number>();
+  project.pages.forEach((p, i) => {
+    if (p.assetId) lastPage.set(p.assetId, i);
+  });
   for (let i = 0; i < project.pages.length; i++) {
     const pg = project.pages[i];
     progress(`PDFを書き出し中 ${i + 1} / ${project.pages.length}`);
-    const canvas = document.createElement('canvas');
-    const scale = Math.min(2, 4096 / Math.max(pg.width, pg.height));
-    await renderPage(pg, canvas, scale);
-    const ctx = canvas.getContext('2d')!;
-    ctx.save();
-    ctx.scale(scale, scale);
-    drawStrokes(ctx, pg.strokes);
-    ctx.restore();
-    const blob = await new Promise<Blob>((resolve, reject) =>
-      canvas.toBlob(
-        (b) => (b ? resolve(b) : reject(new Error('画像変換に失敗しました。'))),
-        'image/png',
-      ),
-    );
-    const image = await doc.embedPng(await blob.arrayBuffer());
     const out = doc.addPage([pg.width, pg.height]);
-    out.drawImage(image, { x: 0, y: 0, width: pg.width, height: pg.height });
+    if (pg.assetId) {
+      if (!sources.has(pg.assetId))
+        sources.set(pg.assetId, await readVectorSource(await getAsset(pg.assetId), doc));
+      const original = await (await getPdf(pg.assetId)).getPage(pg.sourcePage!);
+      await drawPdfBackground(out, original, sources.get(pg.assetId)!);
+      if (lastPage.get(pg.assetId) === i) sources.delete(pg.assetId);
+    }
+    drawPdfInk(out, pg.strokes);
     // Export a clickable link placeholder for videos; editable geometry lives in the backup.
     if (pg.videos.length) {
       for (const v of pg.videos) {
@@ -153,25 +152,13 @@ export async function exportPdf(project: Project, progress: (s: string) => void)
             size: labelSize,
             color: rgb(1, 1, 1),
           });
-        const link = doc.context.obj({
-          Type: 'Annot',
-          Subtype: 'Link',
-          Rect: [left, pg.height - bottom, right, pg.height - top],
-          Border: [0, 0, 0],
-          A: {
-            Type: 'Action',
-            S: 'URI',
-            URI: PDFString.of(`https://www.youtube.com/watch?v=${v.videoId}`),
-          },
-        });
-        const annots = out.node.lookup(PDFName.of('Annots')) as
-          import('pdf-lib').PDFArray | undefined;
-        if (annots) annots.push(doc.context.register(link));
-        else out.node.set(PDFName.of('Annots'), doc.context.obj([doc.context.register(link)]));
+        addPdfLink(
+          out,
+          [left, pg.height - bottom, right, pg.height - top],
+          `https://www.youtube.com/watch?v=${v.videoId}`,
+        );
       }
     }
-    canvas.width = 1;
-    canvas.height = 1;
   }
   return new Blob([new Uint8Array(await doc.save()).buffer], { type: 'application/pdf' });
 }

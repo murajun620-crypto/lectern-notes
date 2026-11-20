@@ -1446,6 +1446,62 @@ test('iPad-sized layout keeps editing controls and ink palettes in the fullscree
   await expect(swatch('蛍光ペン', 2)).toHaveCSS('--swatch', '#ff7a20');
 });
 
+test('nib samples match the displayed ink at the current fit and zoom', async ({ page }) => {
+  await page.setViewportSize({ width: 1024, height: 768 });
+  await demo(page);
+  const pageWidth = (await stored(page))[0].pages[0].width;
+  const paper = page.getByTestId('pdf-page');
+  const compareScale = async (width: number) => {
+    await expect
+      .poll(async () => {
+        const display = (await paper.boundingBox())!;
+        const dot = (await page.locator('.nib-dot').boundingBox())!;
+        return Math.abs(dot.width - (display.width / pageWidth) * width);
+      })
+      .toBeLessThan(0.07);
+  };
+  await page.getByLabel('ペンの太さ', { exact: true }).selectOption('10');
+  await compareScale(10);
+  await page.getByLabel('表示方法').selectOption('width');
+  await compareScale(10);
+  await page.getByLabel('表示倍率').selectOption('3');
+  await compareScale(10);
+
+  await page.getByLabel('用紙上に太さの見本を表示').click();
+  const sample = page.locator('.page-nib-dot');
+  const dot = (await sample.boundingBox())!;
+  const x = dot.x + dot.width / 2;
+  const y = dot.y + dot.height / 2;
+  await page.mouse.click(x, y);
+  await expect(sample).toBeHidden();
+  // Compare against the actual ink pixels of a normal-pressure tap.
+  const canvas = page.getByTestId('ink-canvas');
+  await expect
+    .poll(async () => {
+      const painted = await canvas.evaluate((el: HTMLCanvasElement, screenX) => {
+        const rect = el.getBoundingClientRect();
+        const column = Math.round(((screenX - rect.left) * el.width) / rect.width);
+        const pixels = el.getContext('2d')!.getImageData(column, 0, 1, el.height).data;
+        let rows = 0;
+        for (let i = 3; i < pixels.length; i += 4) if (pixels[i] >= 128) rows++;
+        return (rows * rect.height) / el.height;
+      }, x);
+      return Math.abs(painted - dot.width);
+    })
+    .toBeLessThan(2);
+
+  await page.setViewportSize({ width: 768, height: 1024 });
+  await compareScale(10);
+  await page.getByRole('button', { name: '蛍光ペン', exact: true }).click();
+  await page.getByLabel('蛍光ペンの太さ', { exact: true }).selectOption('50');
+  await page.getByLabel('表示倍率').selectOption('10');
+  await compareScale(50);
+  await page.getByLabel('用紙上に太さの見本を表示').click();
+  const fullSize = (await sample.boundingBox())!;
+  expect(fullSize.width).toBeCloseTo((await page.locator('.nib-dot').boundingBox())!.width, 1);
+  expect(fullSize.width).toBeGreaterThan((await page.locator('.nib-preview').boundingBox())!.width);
+});
+
 test('a small Shorts placement plays upright at the saved size and can enlarge on demand', async ({
   page,
 }) => {

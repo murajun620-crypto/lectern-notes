@@ -24,9 +24,10 @@ export type InkPriority = ReturnType<typeof createInkPriority>;
 export type PencilTool = Exclude<Tool, 'hand'>;
 export const penWidths = [1, 2.5, 4, 7, 10];
 export const highlighterWidths = [5, 12.5, 20, 35, 50];
-export const inkWidthRanges = {
-  penWidth: { min: 0.5, max: 10 },
-  highlighterWidth: { min: 1, max: 50 },
+export const toolWidthRanges = {
+  penWidth: { min: 0.5, max: 10, step: 0.1, unit: 'pt' },
+  highlighterWidth: { min: 1, max: 50, step: 0.1, unit: 'pt' },
+  eraserWidth: { min: 1, max: 80, step: 1, unit: 'px' },
 } as const;
 export type InputPreferences = {
   fingerInk: boolean;
@@ -57,10 +58,11 @@ export const defaultInputPreferences: InputPreferences = {
   laserWidth: 4,
   eraserWidth: 28,
 };
-function readInkWidth(value: unknown, key: keyof typeof inkWidthRanges): number {
-  const { min, max } = inkWidthRanges[key];
+function readToolWidth(value: unknown, key: keyof typeof toolWidthRanges): number {
+  const { min, max, step } = toolWidthRanges[key];
+  const stepsPerUnit = 1 / step;
   return typeof value === 'number' && value >= min && value <= max
-    ? Math.round(value * 10) / 10
+    ? Math.round(value * stepsPerUnit) / stepsPerUnit
     : defaultInputPreferences[key];
 }
 function readPresets(value: unknown, fallback: string[]): string[] {
@@ -82,10 +84,10 @@ export function loadInputPreferences(): InputPreferences {
       showFooter: p.showFooter !== false,
       pageMode: p.pageMode === 'single' ? 'single' : 'continuous',
       penStyle: isPenKind(p.penStyle) ? p.penStyle : undefined,
-      penWidth: readInkWidth(p.penWidth, 'penWidth'),
-      highlighterWidth: readInkWidth(p.highlighterWidth, 'highlighterWidth'),
+      penWidth: readToolWidth(p.penWidth, 'penWidth'),
+      highlighterWidth: readToolWidth(p.highlighterWidth, 'highlighterWidth'),
       laserWidth: [2, 4, 6, 8, 12].includes(p.laserWidth) ? p.laserWidth : 4,
-      eraserWidth: [8, 16, 28, 48, 80].includes(p.eraserWidth) ? p.eraserWidth : 28,
+      eraserWidth: readToolWidth(p.eraserWidth, 'eraserWidth'),
       presets: readPresets(p.presets, defaultInputPreferences.presets),
       highlighterPresets: readPresets(
         p.highlighterPresets,

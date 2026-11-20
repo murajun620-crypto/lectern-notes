@@ -27,6 +27,7 @@ import {
   Plus,
   Redo2,
   Search,
+  Share,
   Settings2,
   Sparkles,
   Tags,
@@ -41,7 +42,16 @@ import {
   CircleAlert,
 } from 'lucide-react';
 import type { Page, PenKind, Project, Stroke, Tool } from './model';
-import { blankPage, clamp, drawStrokes, isPenKind, parseYoutubeUrl, penKinds, uid } from './model';
+import {
+  blankPage,
+  clamp,
+  drawStrokes,
+  isPenKind,
+  parseYoutubeUrl,
+  penKinds,
+  penOutline,
+  uid,
+} from './model';
 import {
   deleteProject,
   download,
@@ -53,12 +63,13 @@ import {
   setProjectTags,
 } from './storage';
 import { matchesTag, ProjectTagForm, TagFilter } from './ProjectTags';
+import { PdfShare } from './PdfShare';
 import { demoFile, exportPdf, importPdf, releasePdfs, renderPage } from './pdf';
 import Stage from './Stage';
 import {
   createInkPriority,
   highlighterWidths,
-  inkWidthRanges,
+  toolWidthRanges,
   loadInputPreferences,
   penWidths,
 } from './input';
@@ -231,6 +242,7 @@ type Dialog =
   | { kind: 'tags'; id: string }
   | { kind: 'delete'; id: string; name: string }
   | { kind: 'deletePage'; id: string }
+  | { kind: 'sharePdf'; file: File }
   | { kind: 'video' }
   | { kind: 'help' }
   | null;
@@ -300,12 +312,53 @@ export default function App() {
         ? 'eraserWidth'
         : palette.widthPreference;
   const toolWidth = preferences[widthPreference];
-  const setToolWidth = (value: number) =>
+  const erasing = widthTool === 'eraser';
+  const widthRange =
+    widthPreference === 'laserWidth' ? undefined : toolWidthRanges[widthPreference];
+  const widthUnit = widthRange?.unit ?? 'px';
+  const inkScale = useRef(1);
+  const toolbarNib = useRef<HTMLSpanElement>(null);
+  const paperNib = useRef<HTMLSpanElement>(null);
+  const previewTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  // Use the paper's live transform without rerendering the editor on every pinch frame.
+  const syncNibScale = useCallback((scale: number) => {
+    if (scale === inkScale.current) return;
+    inkScale.current = scale;
+    toolbarNib.current?.style.setProperty('--ink-scale', String(scale));
+    paperNib.current?.style.setProperty('--ink-scale', String(scale));
+  }, []);
+  const showNib = () => {
+    const layer = paperNib.current?.parentElement;
+    if (!layer) return;
+    clearTimeout(previewTimer.current);
+    layer.dataset.visible = '';
+    previewTimer.current = setTimeout(() => delete layer.dataset.visible, 1200);
+  };
+  useEffect(() => () => clearTimeout(previewTimer.current), []);
+  const setToolWidth = (value: number) => {
+    showNib();
     setPreferences((p) => ({ ...p, [widthPreference]: value }));
-  const inkRange =
-    widthTool === 'laser' || widthTool === 'eraser'
-      ? undefined
-      : inkWidthRanges[palette.widthPreference];
+  };
+  // Measure the nib that produces a dot at the pressure used by finger and mouse input.
+  const nibSize = useMemo(() => {
+    if (writingTool === 'highlighter') return width;
+    const outline = penOutline({
+      id: 'sample',
+      tool: 'pen',
+      penKind: preferences.penStyle,
+      width,
+      color: '#000000',
+      points: [{ x: 0, y: 0, p: 0.5 }],
+    });
+    return 2 * Math.max(...outline.map(([, y]) => y));
+  }, [writingTool, width, preferences.penStyle]);
+  const nibStyle = {
+    width: erasing ? toolWidth : nibSize,
+    height: erasing ? toolWidth : nibSize,
+    backgroundColor: erasing ? undefined : color,
+    opacity: !erasing && writingTool === 'highlighter' ? 0.3 : undefined,
+    '--ink-scale': inkScale.current,
+  } as React.CSSProperties;
   const widthLabel =
     widthTool === 'laser'
       ? 'レーザーの太さ'
@@ -672,11 +725,19 @@ export default function App() {
       await flush();
     }
   };
-  const exportDocument = () =>
-    project &&
+  const exportDocument = (share = false) => {
+    const snapshot = current.current;
+    if (!snapshot) return;
     void run('PDFを書き出し中…', async () => {
-      download(await exportPdf(project, setBusy), `${project.name}-書き込み.pdf`);
+      const blob = await exportPdf(snapshot, setBusy);
+      const name = `${snapshot.name}-書き込み.pdf`;
+      if (share) {
+        setDialog({ kind: 'sharePdf', file: new File([blob], name, { type: 'application/pdf' }) });
+      } else {
+        download(blob, name);
+      }
     });
+  };
   const addBlank = () => {
     const newPage = blankPage(page?.width, page?.height);
     update((p) => ({
@@ -1147,9 +1208,14 @@ export default function App() {
                     <button onClick={backup}>
                       <Download size={17} /> 編集可能なバックアップ
                     </button>
-                    <button onClick={exportDocument}>
+                    <button onClick={() => exportDocument()}>
                       <FileText size={17} /> 書き込み入りPDF
                     </button>
+                    {typeof navigator.share === 'function' && (
+                      <button onClick={() => exportDocument(true)}>
+                        <Share size={17} /> PDFファイルを共有
+                      </button>
+                    )}
                     <button onClick={() => setDialog({ kind: 'tags', id: project.id })}>
                       <Tags size={17} /> 科目・年度を編集
                     </button>
@@ -1242,26 +1308,34 @@ export default function App() {
                 />
               ))}
               <div
-                className={inkRange ? 'ink-width-control' : 'width-select'}
-                data-ink-tool={inkRange ? writingTool : undefined}
+                className={widthRange ? 'ink-width-control' : 'width-select'}
+                data-ink-tool={erasing ? 'eraser' : writingTool}
               >
-                {inkRange ? (
-                  <span
+                {widthRange ? (
+                  <button
+                    type="button"
                     className="nib-preview"
-                    title={`太さの見本（${toolWidth} pt、1 pt を 1 px で表示）`}
+                    aria-label="用紙上に太さの見本を表示"
+                    title={
+                      erasing
+                        ? '消しゴムの直径を用紙上に実寸表示'
+                        : '用紙上に実寸表示（ペンは標準筆圧の見本）'
+                    }
+                    onClick={showNib}
                   >
                     <span
                       aria-hidden="true"
-                      className="nib-dot"
-                      style={{ width: toolWidth, height: toolWidth, backgroundColor: color }}
+                      className={erasing ? 'nib-dot eraser-nib' : 'nib-dot'}
+                      ref={toolbarNib}
+                      style={nibStyle}
                     />
-                  </span>
+                  </button>
                 ) : (
                   <span
-                    className={`width-preview ${widthTool === 'eraser' ? 'eraser-preview' : ''}`}
+                    className="width-preview"
                     style={{
-                      height: widthTool === 'eraser' ? 16 : Math.min(toolWidth, 10),
-                      background: widthTool === 'eraser' ? '#fff' : '#ff3c3c',
+                      height: Math.min(toolWidth, 10),
+                      background: '#ff3c3c',
                     }}
                   />
                 )}
@@ -1270,24 +1344,27 @@ export default function App() {
                   value={toolWidth}
                   onChange={(e) => setToolWidth(Number(e.currentTarget.value))}
                 >
-                  {inkRange && !widthOptions.includes(toolWidth) && (
-                    <option value={toolWidth}>{toolWidth} pt</option>
+                  {widthRange && !widthOptions.includes(toolWidth) && (
+                    <option value={toolWidth}>
+                      {toolWidth} {widthUnit}
+                    </option>
                   )}
                   {widthOptions.map((v) => (
                     <option key={v} value={v}>
-                      {v} {inkRange ? 'pt' : 'px'}
+                      {v} {widthUnit}
                     </option>
                   ))}
                 </select>
-                {inkRange && (
+                {widthRange && (
                   <input
                     type="range"
                     aria-label={`${widthLabel}を調整`}
-                    aria-valuetext={`${toolWidth} pt`}
-                    min={inkRange.min}
-                    max={inkRange.max}
-                    step={0.1}
+                    aria-valuetext={`${toolWidth} ${widthUnit}`}
+                    min={widthRange.min}
+                    max={widthRange.max}
+                    step={widthRange.step}
                     value={toolWidth}
+                    onPointerDown={showNib}
                     onChange={(e) => setToolWidth(e.currentTarget.valueAsNumber)}
                   />
                 )}
@@ -1555,7 +1632,13 @@ export default function App() {
                 </button>
               </aside>
             )}
-            <div className="canvas-area">
+            <div
+              className="canvas-area"
+              onPointerDownCapture={() => {
+                const layer = paperNib.current?.parentElement;
+                if (layer?.hasAttribute('data-visible')) delete layer.dataset.visible;
+              }}
+            >
               {page && (
                 <Stage
                   key={`${project.id}:${preferences.pageMode}`}
@@ -1579,6 +1662,7 @@ export default function App() {
                   trail={trail}
                   registerPlayback={registerPlayback}
                   fitWidth={fitWidth}
+                  onInkScaleChange={syncNibScale}
                   zoom={zoom}
                   setZoom={setZoom}
                   inkClipboard={inkClipboard}
@@ -1589,6 +1673,15 @@ export default function App() {
                   onNavigate={navigate}
                   onError={setError}
                 />
+              )}
+              {widthRange && (
+                <div className="paper-nib-preview" aria-hidden="true">
+                  <span
+                    className={erasing ? 'page-nib-dot eraser-nib' : 'page-nib-dot'}
+                    ref={paperNib}
+                    style={nibStyle}
+                  />
+                </div>
               )}
               {fullscreen && (
                 <>
@@ -1655,6 +1748,11 @@ export default function App() {
           <Loader2 className="spin" size={25} />
           <p>{busy}</p>
         </div>
+      )}
+      {dialog?.kind === 'sharePdf' && (
+        <Modal title="PDFファイルを共有" onClose={() => setDialog(null)}>
+          <PdfShare file={dialog.file} onClose={() => setDialog(null)} />
+        </Modal>
       )}
       {dialog?.kind === 'video' && (
         <Modal title="YouTube動画を挿入" onClose={() => setDialog(null)}>
@@ -1815,7 +1913,9 @@ export default function App() {
             </p>
             <h3>PDFの書き出し</h3>
             <p>
-              PDFと手書きを画像として合成します（最大4096px／ページ、元のテキスト選択や検索は保持しません）。動画は再生リンク付きの枠として出力。動画そのものはPDF内で再生できません。再編集にはバックアップZIPを使ってください。
+              元のPDFの文字・図を保って筆記を重ね、動画は再生リンク付きの枠として書き出します。対応端末では「書き出す
+              →
+              PDFファイルを共有」からPDFそのものを渡せます。保存したPDFは「ファイル」アプリからも共有できます。再編集にはバックアップZIPを使ってください。
             </p>
             <h3>講義と画面ミラーリング</h3>
             <p>

@@ -379,11 +379,21 @@ export function strokeShape(stroke: Stroke) {
   const bounds = emptyInkBounds();
   for (const p of points)
     includeVertex(bounds, p, stroke.tool === 'pen' ? 1 : stroke.width / 2 + 1);
+  traceInkPath(path, stroke, points);
+  strokePaths.set(stroke, { count, path });
+  return { path, points, bounds };
+}
+
+/** Canvas and PDF use the same smoothed centerline or pressure-bearing outline. */
+export function traceInkPath(
+  path: Pick<Path2D, 'moveTo' | 'lineTo' | 'quadraticCurveTo' | 'closePath'>,
+  stroke: Stroke,
+  outline = stroke.tool === 'pen' ? penOutline(stroke) : [],
+) {
   if (stroke.tool === 'highlighter') {
     traceCurve(path, stroke.points);
     if (stroke.points.length === 1) path.lineTo(stroke.points[0].x + 0.01, stroke.points[0].y);
   } else {
-    const outline = points;
     if (outline.length) {
       const first = outline[0],
         last = outline.at(-1)!;
@@ -396,8 +406,6 @@ export function strokeShape(stroke: Stroke) {
       path.closePath();
     }
   }
-  strokePaths.set(stroke, { count, path });
-  return { path, points, bounds };
 }
 
 /** Quadratic segments only depend on neighboring vertices. Include both sides of edited spans. */
@@ -461,6 +469,16 @@ export function drawStrokes(ctx: CanvasRenderingContext2D, strokes: Stroke[]) {
 }
 
 const graphitePatterns = new WeakMap<CanvasRenderingContext2D, Map<string, CanvasPattern>>();
+export const graphitePixelSize = 0.38;
+export function graphiteGrain() {
+  const alpha = new Uint8ClampedArray(32 * 32);
+  let seed = 173;
+  for (let i = 0; i < alpha.length; i++) {
+    seed = (Math.imul(1664525, seed) + 1013904223) >>> 0;
+    alpha[i] = 62 + ((seed >>> 24) * 158) / 255;
+  }
+  return alpha;
+}
 function graphitePattern(ctx: CanvasRenderingContext2D, color: string) {
   let patterns = graphitePatterns.get(ctx);
   if (!patterns) {
@@ -475,19 +493,18 @@ function graphitePattern(ctx: CanvasRenderingContext2D, color: string) {
   if (!texture) return null;
   const rgba = texture.createImageData(tile.width, tile.height);
   const rgb = Number.parseInt(color.slice(1), 16);
-  let seed = 173;
+  const alpha = graphiteGrain();
   for (let i = 0; i < rgba.data.length; i += 4) {
-    seed = (Math.imul(1664525, seed) + 1013904223) >>> 0;
     rgba.data[i] = rgb >>> 16;
     rgba.data[i + 1] = (rgb >>> 8) & 255;
     rgba.data[i + 2] = rgb & 255;
-    rgba.data[i + 3] = 62 + ((seed >>> 24) * 158) / 255;
+    rgba.data[i + 3] = alpha[i / 4];
   }
   texture.putImageData(rgba, 0, 0);
   const pattern = ctx.createPattern(tile, 'repeat');
   if (!pattern) return null;
   // Keep the grain anchored to the PDF, including on zoom and export.
-  pattern.setTransform({ a: 0.38, d: 0.38 });
+  pattern.setTransform({ a: graphitePixelSize, d: graphitePixelSize });
   if (patterns.size >= 24) patterns.clear();
   patterns.set(color, pattern);
   return pattern;

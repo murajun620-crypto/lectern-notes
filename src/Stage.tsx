@@ -82,6 +82,7 @@ type Props = {
   registerPlayback: RegisterPlayback;
   fitWidth: boolean;
   zoom: number;
+  onInkScaleChange: (scale: number) => void;
   inkClipboard: Stroke[];
   inkPriority: InkPriority;
   pencilDiagnostics: PencilDiagnostics | null;
@@ -111,6 +112,7 @@ export default function Stage({
   registerPlayback,
   fitWidth,
   zoom,
+  onInkScaleChange,
   inkClipboard,
   inkPriority,
   pencilDiagnostics,
@@ -216,12 +218,16 @@ export default function Stage({
     if (stage && !stage.hasAttribute('data-ink-preview'))
       stage.setAttribute('data-ink-preview', '');
   }, []);
-  const paintOverlays = useCallback((view: PageView) => {
-    paintPreview.current(view);
-    observePdf.current(view);
-  }, []);
   const stack = usePageStack(continuousPages, page, size, fitWidth, onFocusPage);
   const { fit, contentBounds, paintStack, pagePosition, settleStack, takePagePan } = stack;
+  const paintOverlays = useCallback(
+    (view: PageView) => {
+      paintPreview.current(view);
+      observePdf.current(view);
+      onInkScaleChange(fit * view.zoom);
+    },
+    [fit, onInkScaleChange],
+  );
   const {
     view,
     pan,
