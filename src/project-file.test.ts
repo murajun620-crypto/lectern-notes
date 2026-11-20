@@ -11,12 +11,6 @@ vi.mock('idb', () => ({
   openDB: async () => ({
     get: (store: string, id: string) => (store === 'assets' ? assets : projects).get(id),
     getKey: (_store: string, id: string) => (assets.has(id) ? id : undefined),
-    transaction: () => ({
-      objectStore: (store: string) => ({
-        get: (id: string) => (store === 'projects' ? projects.get(id) : undefined),
-      }),
-      done: Promise.resolve(),
-    }),
   }),
 }));
 

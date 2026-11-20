@@ -46,8 +46,6 @@ jobs:
       - run: pnpm build
         env:
           VITE_BASE_PATH: /${{ github.event.repository.name }}/
-          VITE_ONEDRIVE_CLIENT_ID: ${{ vars.LECTERN_ONEDRIVE_CLIENT_ID }}
-          VITE_ONEDRIVE_AUTHORITY: ${{ vars.LECTERN_ONEDRIVE_AUTHORITY }}
       - uses: actions/upload-pages-artifact@v4
         if: github.event_name != 'pull_request'
         with:

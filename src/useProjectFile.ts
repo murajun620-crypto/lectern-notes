@@ -1,28 +1,11 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { ChangeEvent } from 'react';
 import type { Project } from './model';
-import type { OneDriveClient, OneDriveFile } from './oneDrive';
-import {
-  download,
-  exportProjectFile,
-  getProjectFileTarget,
-  openProjectFile,
-  prepareProjectFile,
-  sameProjectFileTarget,
-  updateProjectFileTarget,
-} from './storage';
-import type { OneDriveProjectTarget, PreparedProjectFile } from './storage';
+import { download, exportProjectFile, openProjectFile, prepareProjectFile } from './storage';
+import type { PreparedProjectFile } from './storage';
 
 type RunOperation = (label: string, action: () => Promise<void>) => Promise<void>;
 type SaveTarget = { handle: FileSystemFileHandle; size: number; lastModified: number };
-type OneDrive = { getClient: () => Promise<{ accountId: string; client: OneDriveClient }> };
-type Session = {
-  id?: string;
-  target?: SaveTarget;
-  oneDriveTarget?: OneDriveProjectTarget;
-  targetError?: unknown;
-};
-type Pending = { prepared: PreparedProjectFile; target?: OneDriveProjectTarget };
 type SavePicker = (options: {
   suggestedName: string;
   types: { description: string; accept: Record<string, string[]> }[];
@@ -50,38 +33,16 @@ export function useProjectFile(
   projectId: string | undefined,
   open: (project: Project) => Promise<void>,
   run: RunOperation,
-  oneDrive: OneDrive,
 ) {
   const inputRef = useRef<HTMLInputElement>(null);
-  const session = useRef<Session>({ id: projectId });
+  const session = useRef<{ id?: string; target?: SaveTarget }>({ id: projectId });
   const running = useRef(false);
-  const [pending, setPending] = useState<Pending | null>(null);
-  const [cloudBinding, setCloudBinding] = useState<{
-    projectId: string;
-    target?: OneDriveProjectTarget;
-  } | null>(null);
+  const [pending, setPending] = useState<PreparedProjectFile | null>(null);
   const [fileNotice, setFileNotice] = useState('');
   useLayoutEffect(() => {
     session.current = { id: projectId };
     setPending(null);
-    setCloudBinding(null);
     setFileNotice('');
-  }, [projectId]);
-  useEffect(() => {
-    if (!projectId) return;
-    const active = session.current;
-    void getProjectFileTarget(projectId).then(
-      (target) => {
-        if (active !== session.current) return;
-        active.oneDriveTarget = target;
-        setCloudBinding({ projectId, target });
-      },
-      (error) => {
-        if (active !== session.current) return;
-        active.targetError = error;
-        setCloudBinding({ projectId });
-      },
-    );
   }, [projectId]);
   useEffect(() => {
     if (!fileNotice) return;
@@ -99,91 +60,28 @@ export function useProjectFile(
     }
   };
   const chooseFile = () => inputRef.current?.click();
-  const openArchive = async (file: File, target?: OneDriveProjectTarget) => {
-    const prepared = await prepareProjectFile(file);
-    if (prepared.conflict) setPending({ prepared, target });
-    else await open(await openProjectFile(prepared, { target }));
-  };
   const readInput = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.currentTarget.files?.[0];
     event.currentTarget.value = '';
     if (!file) return;
-    void perform('プロジェクトを開いています…', () => openArchive(file));
-  };
-  const openOneDrive = (file: OneDriveFile) => {
-    // Opening from the library ensures the current project's local edits have finished saving.
-    if (session.current.id) return;
-    void perform('OneDriveのプロジェクトを開いています…', async () => {
-      const { accountId, client } = await oneDrive.getClient();
-      const { file: archive, item } = await client.download(file);
-      await openArchive(archive, { ...item, accountId });
+    void perform('プロジェクトを開いています…', async () => {
+      const prepared = await prepareProjectFile(file);
+      if (prepared.conflict) setPending(prepared);
+      else await open(await openProjectFile(prepared));
     });
   };
-  const resolveConflict = (onConflict: 'replace' | 'keep-local') => {
+  const replaceConflict = () => {
     if (!pending) return;
     setPending(null);
     void perform('プロジェクトを開いています…', async () => {
-      await open(await openProjectFile(pending.prepared, { onConflict, target: pending.target }));
+      await open(await openProjectFile(pending, true));
     });
   };
-  const saveToOneDrive = async (
-    project: Project,
-    active: Session,
-    target: OneDriveProjectTarget,
-  ) => {
-    const { client, accountId } = await oneDrive.getClient();
-    if (accountId !== target.accountId)
-      throw new Error('保存先に紐づいているMicrosoftアカウントでサインインしてください。');
-    const archive = await exportProjectFile(project);
-    const stored = await getProjectFileTarget(project.id);
-    if (!sameProjectFileTarget(stored, target)) {
-      if (active === session.current) {
-        active.oneDriveTarget = stored;
-        setCloudBinding({ projectId: project.id, target: stored });
-      }
-      throw new Error('この端末で保存先が変更されました。現在の保存先を確認してください。');
-    }
-    const saved = { ...(await client.save(target, archive)), accountId };
-    const updated = await updateProjectFileTarget(project.id, target, saved);
-    if (active !== session.current) return;
-    if (updated) {
-      active.oneDriveTarget = saved;
-      setCloudBinding({ projectId: project.id, target: saved });
-      setFileNotice(`OneDriveの「${saved.name}」に保存しました。`);
-    } else {
-      const latest = await getProjectFileTarget(project.id);
-      if (active !== session.current) return;
-      active.oneDriveTarget = latest;
-      setCloudBinding({ projectId: project.id, target: latest });
-      setFileNotice(`OneDriveの「${saved.name}」に保存しました。現在の保存先は変更されています。`);
-    }
-  };
-  const saveLocalFile = (project: Project) => {
-    const active = session.current;
-    if (active.id !== project.id) return;
-    void perform('プロジェクトのコピーを保存しています…', async () => {
-      setFileNotice('');
-      const filename = projectFilename(project.name);
-      download(await exportProjectFile(project), filename);
-      if (active === session.current)
-        setFileNotice(`「${filename}」のダウンロードを開始しました。`);
-    });
-  };
-  const saveReady = cloudBinding?.projectId === projectId;
   const saveFile = (project: Project) => {
     const active = session.current;
-    if (active.id !== project.id || !saveReady) return;
-    const target = active.oneDriveTarget;
-    if (target) {
-      void perform('OneDriveに保存しています…', async () => {
-        setFileNotice('');
-        await saveToOneDrive(project, active, target);
-      });
-      return;
-    }
+    if (active.id !== project.id) return;
     void perform('プロジェクトを保存しています…', async () => {
       setFileNotice('');
-      if (active.targetError) throw active.targetError;
       const filename = projectFilename(project.name);
       const browser = window as Window & { showSaveFilePicker?: SavePicker };
       const previous = active.target;
@@ -245,21 +143,10 @@ export function useProjectFile(
     inputRef,
     chooseFile,
     readInput,
-    openOneDrive,
     saveFile,
-    saveLocalFile,
-    saveReady,
-    oneDriveTarget: saveReady ? cloudBinding?.target : undefined,
     fileNotice,
-    conflict: pending?.prepared.existing
-      ? {
-          incoming: pending.prepared.project,
-          local: pending.prepared.existing,
-          fromOneDrive: Boolean(pending.target),
-        }
-      : null,
+    conflict: pending?.existing ? { incoming: pending.project, local: pending.existing } : null,
     cancelConflict: () => setPending(null),
-    replaceConflict: () => resolveConflict('replace'),
-    keepLocalAndLink: () => resolveConflict('keep-local'),
+    replaceConflict,
   };
 }

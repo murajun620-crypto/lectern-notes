@@ -3,18 +3,15 @@ import type { IDBPDatabase, IDBPTransaction } from 'idb';
 import JSZip from 'jszip';
 import { isPenKind, uid } from './model';
 import type { Project, Page } from './model';
-import type { OneDriveFile } from './oneDrive';
 import { videoPlacementBounds } from './video-layout';
 let connection: ReturnType<typeof openDB> | undefined;
 function db() {
   if (connection) return connection;
-  const opened = openDB('lectern', 2, {
-    upgrade(db, oldVersion) {
-      if (oldVersion < 1) {
-        db.createObjectStore('projects', { keyPath: 'id' });
-        db.createObjectStore('assets');
-      }
-      if (oldVersion < 2) db.createObjectStore('projectFileTargets');
+  // Open the existing schema version so data from releases that used version 2 stays readable.
+  const opened = openDB('lectern', undefined, {
+    upgrade(db) {
+      db.createObjectStore('projects', { keyPath: 'id' });
+      db.createObjectStore('assets');
     },
     blocking(_old, _next, event) {
       (event.target as IDBDatabase).close();
@@ -89,34 +86,6 @@ export const listProjects = async (): Promise<Project[]> =>
 export const saveProject = async (p: Project) => {
   await withStorage('教材を保存できませんでした', (database) => database.put('projects', p));
 };
-
-export type OneDriveProjectTarget = OneDriveFile & { accountId: string };
-
-export function getProjectFileTarget(
-  projectId: string,
-): Promise<OneDriveProjectTarget | undefined> {
-  return withStorage('OneDriveの保存先を確認できませんでした', (database) =>
-    database.get('projectFileTargets', projectId),
-  );
-}
-
-export function sameProjectFileTarget(
-  a: OneDriveProjectTarget | undefined,
-  b: OneDriveProjectTarget | undefined,
-) {
-  return (
-    a === b ||
-    (!!a &&
-      !!b &&
-      a.accountId === b.accountId &&
-      a.driveId === b.driveId &&
-      a.id === b.id &&
-      a.name === b.name &&
-      a.eTag === b.eTag &&
-      a.size === b.size)
-  );
-}
-
 function writeTransaction(
   action: string,
   stores: string[],
@@ -137,27 +106,6 @@ function writeTransaction(
     }
   });
 }
-
-export async function updateProjectFileTarget(
-  projectId: string,
-  expected: OneDriveProjectTarget,
-  next: OneDriveProjectTarget,
-) {
-  let updated = false;
-  await writeTransaction(
-    'OneDriveの保存先を更新できませんでした',
-    ['projectFileTargets'],
-    async (tx) => {
-      updated = false;
-      const targets = tx.objectStore('projectFileTargets');
-      if (!sameProjectFileTarget(await targets.get(projectId), expected)) return;
-      await targets.put(next, projectId);
-      updated = true;
-    },
-  );
-  return updated;
-}
-
 export async function setProjectTags(id: string, tags: Pick<Project, 'subject' | 'academicYear'>) {
   await writeTransaction('タグを保存できませんでした', ['projects'], async (tx) => {
     const store = tx.objectStore('projects');
@@ -181,20 +129,15 @@ export const getAsset = async (id: string): Promise<ArrayBuffer> => {
   return a;
 };
 export async function deleteProject(id: string) {
-  await writeTransaction(
-    '教材を削除できませんでした',
-    ['projects', 'assets', 'projectFileTargets'],
-    async (tx) => {
-      await tx.objectStore('projects').delete(id);
-      await tx.objectStore('projectFileTargets').delete(id);
-      const projects: Project[] = await tx.objectStore('projects').getAll();
-      const used = new Set(
-        projects.flatMap((p) => p.pages.flatMap((page) => (page.assetId ? [page.assetId] : []))),
-      );
-      for (const key of await tx.objectStore('assets').getAllKeys())
-        if (!used.has(String(key))) await tx.objectStore('assets').delete(key);
-    },
-  );
+  await writeTransaction('教材を削除できませんでした', ['projects', 'assets'], async (tx) => {
+    await tx.objectStore('projects').delete(id);
+    const projects: Project[] = await tx.objectStore('projects').getAll();
+    const used = new Set(
+      projects.flatMap((p) => p.pages.flatMap((page) => (page.assetId ? [page.assetId] : []))),
+    );
+    for (const key of await tx.objectStore('assets').getAllKeys())
+      if (!used.has(String(key))) await tx.objectStore('assets').delete(key);
+  });
 }
 export function download(blob: Blob, name: string) {
   const url = URL.createObjectURL(blob),
@@ -434,7 +377,6 @@ export async function importBackup(file: File): Promise<Project> {
 export type PreparedProjectFile = {
   project: Project;
   existing: Project | undefined;
-  existingTarget: OneDriveProjectTarget | undefined;
   conflict: boolean;
   assets: Map<string, ArrayBuffer>;
 };
@@ -465,17 +407,9 @@ export async function prepareProjectFile(file: File): Promise<PreparedProjectFil
   ) {
     throw new Error('プロジェクトの識別子または日時が不正です。');
   }
-  const [existing, existingTarget] = await withStorage(
+  const existing: Project | undefined = await withStorage(
     '教材を確認できませんでした',
-    async (database): Promise<[Project | undefined, OneDriveProjectTarget | undefined]> => {
-      const tx = database.transaction(['projects', 'projectFileTargets'], 'readonly');
-      const [existing, existingTarget] = await Promise.all([
-        tx.objectStore('projects').get(incoming.id),
-        tx.objectStore('projectFileTargets').get(incoming.id),
-        tx.done,
-      ]);
-      return [existing, existingTarget];
-    },
+    (database) => database.get('projects', incoming.id),
   );
   const localByContent = new Map<string, string>();
   const contentByLocal = new Map<string, string>();
@@ -519,7 +453,6 @@ export async function prepareProjectFile(file: File): Promise<PreparedProjectFil
   return {
     project,
     existing,
-    existingTarget,
     conflict:
       !!existing &&
       editableContent(existing, contentByLocal) !== editableContent(project, contentByLocal),
@@ -529,56 +462,37 @@ export async function prepareProjectFile(file: File): Promise<PreparedProjectFil
 
 export async function openProjectFile(
   prepared: PreparedProjectFile,
-  options: { onConflict?: 'replace' | 'keep-local'; target?: OneDriveProjectTarget } = {},
+  replace = false,
 ): Promise<Project> {
-  const { project, existing, existingTarget, conflict, assets } = prepared;
-  const { onConflict, target } = options;
-  if (conflict && !onConflict) throw new Error('この端末の資料を置き換えるか選んでください。');
-  if (onConflict === 'keep-local' && (!target || !existing))
-    throw new Error('この端末の資料をOneDriveに紐づけられませんでした。');
+  const { project, existing, conflict, assets } = prepared;
+  if (conflict && !replace) throw new Error('この端末の資料を置き換えるか選んでください。');
   let opened = project;
-  await writeTransaction(
-    'プロジェクトを開けませんでした',
-    ['projects', 'assets', 'projectFileTargets'],
-    async (tx) => {
-      const projects = tx.objectStore('projects');
-      const targets = tx.objectStore('projectFileTargets');
-      const stored: Project | undefined = await projects.get(project.id);
-      if (
-        JSON.stringify(stored) !== JSON.stringify(existing) ||
-        !sameProjectFileTarget(await targets.get(project.id), existingTarget)
-      )
-        throw new Error(
-          '確認中にこの端末の資料が変更されました。ファイルをもう一度開いてください。',
-        );
-      if (target) await targets.put(target, project.id);
-      else if (existingTarget) await targets.delete(project.id);
-      if (onConflict === 'keep-local' && stored) {
-        opened = stored;
-        return;
+  await writeTransaction('プロジェクトを開けませんでした', ['projects', 'assets'], async (tx) => {
+    const projects = tx.objectStore('projects');
+    const stored: Project | undefined = await projects.get(project.id);
+    if (JSON.stringify(stored) !== JSON.stringify(existing))
+      throw new Error('確認中にこの端末の資料が変更されました。ファイルをもう一度開いてください。');
+    const pdfs = tx.objectStore('assets');
+    for (const [id, data] of assets)
+      if ((await pdfs.getKey(id)) === undefined) await pdfs.add(data, id);
+    if (stored && !conflict) {
+      opened =
+        stored.currentPage === project.currentPage
+          ? stored
+          : { ...stored, currentPage: project.currentPage };
+      if (opened !== stored) await projects.put(opened);
+      return;
+    }
+    await projects.put(project);
+    if (stored) {
+      const old = assetIds(stored);
+      for (const id of assetIds(project)) old.delete(id);
+      if (old.size) {
+        for (const other of (await projects.getAll()) as Project[])
+          for (const id of assetIds(other)) old.delete(id);
+        for (const id of old) await pdfs.delete(id);
       }
-      const pdfs = tx.objectStore('assets');
-      for (const [id, data] of assets)
-        if ((await pdfs.getKey(id)) === undefined) await pdfs.add(data, id);
-      if (stored && !conflict) {
-        opened =
-          stored.currentPage === project.currentPage
-            ? stored
-            : { ...stored, currentPage: project.currentPage };
-        if (opened !== stored) await projects.put(opened);
-        return;
-      }
-      await projects.put(project);
-      if (stored) {
-        const old = assetIds(stored);
-        for (const id of assetIds(project)) old.delete(id);
-        if (old.size) {
-          for (const other of (await projects.getAll()) as Project[])
-            for (const id of assetIds(other)) old.delete(id);
-          for (const id of old) await pdfs.delete(id);
-        }
-      }
-    },
-  );
+    }
+  });
   return opened;
 }

@@ -1,7 +1,6 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { execFileSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
 const version =
   process.env.GITHUB_SHA?.slice(0, 12) ||
   (() => {
@@ -36,10 +35,6 @@ export default defineConfig({
   build: {
     target: 'safari16.4',
     rollupOptions: {
-      input: {
-        main: fileURLToPath(new URL('./index.html', import.meta.url)),
-        oneDriveRedirect: fileURLToPath(new URL('./onedrive-redirect.html', import.meta.url)),
-      },
       output: {
         manualChunks: {
           'pdf-render': ['pdfjs-dist'],

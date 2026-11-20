@@ -94,6 +94,23 @@ test('an editable file makes a round trip between isolated devices with its PDF,
   expect(before.project.pages[0].strokes).toHaveLength(1);
   expect(before.project.pages[0].videos[0].videoId).toBe('M7lc1UVf-VE');
   await goToLibrary(desktop);
+  await test.step('Reopen the library with the database version deployed before the rollback', async () => {
+    await desktop.goto('/version.json');
+    await desktop.evaluate(
+      () =>
+        new Promise<void>((resolve, reject) => {
+          const request = indexedDB.open('lectern', 2);
+          request.onupgradeneeded = () => request.result.createObjectStore('projectFileTargets');
+          request.onsuccess = () => {
+            request.result.close();
+            resolve();
+          };
+          request.onerror = () => reject(request.error);
+        }),
+    );
+    await desktop.goto('/');
+    await expect(desktop.locator('.project-open')).toHaveCount(1);
+  });
 
   const device = await browser.newContext({ baseURL, viewport: { width: 1024, height: 768 } });
   try {
