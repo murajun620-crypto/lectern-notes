@@ -12,7 +12,7 @@ async function demo(page: Page) {
 async function stored(page: Page) {
   return page.evaluate(async () => {
     const db = await new Promise<IDBDatabase>((resolve) => {
-      const r = indexedDB.open('lectern', 1);
+      const r = indexedDB.open('lectern');
       r.onsuccess = () => resolve(r.result);
     });
     try {

@@ -410,6 +410,8 @@ h3 {
 }
 .action-group {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 10px;
 }
 .action-group .primary,
@@ -1685,6 +1687,72 @@ dialog > p {
 }
 .project-versions dd {
   margin: 0;
+}
+.project-conflict-actions {
+  flex-wrap: wrap;
+}
+.onedrive-account,
+.onedrive-path,
+.onedrive-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.onedrive-account {
+  justify-content: space-between;
+  flex-wrap: wrap;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+.onedrive-path {
+  flex-wrap: wrap;
+  gap: 0 6px;
+  margin-bottom: 8px;
+}
+.onedrive-path button {
+  min-height: 40px;
+  padding: 4px 7px;
+  overflow-wrap: anywhere;
+  border-radius: 5px;
+  font-size: 12px;
+}
+.onedrive-path button + button {
+  border-left: 1px solid var(--line);
+}
+.onedrive-path button:disabled {
+  opacity: 1;
+  font-weight: 600;
+}
+.onedrive-entries {
+  max-height: min(48dvh, 430px);
+  overflow-y: auto;
+  list-style: none;
+  margin: 0;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+.onedrive-entries button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 44px;
+  padding: 8px;
+  text-align: left;
+  overflow-wrap: anywhere;
+  border-radius: 5px;
+}
+.onedrive-entries button:hover,
+.onedrive-path button:hover {
+  background: #f2f5ee;
+}
+.onedrive-loading,
+.onedrive-empty {
+  margin: 8px;
+  font-size: 12px;
+  color: #62796a;
 }
 .project-file-notice:not(:empty) {
   position: fixed;

@@ -11,7 +11,7 @@ async function demo(page: Page) {
 async function stored(page: Page) {
   return page.evaluate(async () => {
     const db = await new Promise<IDBDatabase>((resolve) => {
-      const r = indexedDB.open('lectern', 1);
+      const r = indexedDB.open('lectern');
       r.onsuccess = () => resolve(r.result);
     });
     const data = await new Promise<any[]>((resolve) => {
@@ -1184,7 +1184,7 @@ test('light Pencil strokes stay continuous and ink history updates without repai
   await demo(page);
   await page.evaluate(async () => {
     const db = await new Promise<IDBDatabase>((resolve) => {
-      const request = indexedDB.open('lectern', 1);
+      const request = indexedDB.open('lectern');
       request.onsuccess = () => resolve(request.result);
     });
     await new Promise<void>((resolve, reject) => {

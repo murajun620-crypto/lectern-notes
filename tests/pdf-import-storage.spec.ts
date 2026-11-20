@@ -29,7 +29,7 @@ async function readLibrary(page: Page) {
         request.onerror = () => reject(request.error);
       });
     }
-    const db = await result(indexedDB.open('lectern', 1));
+    const db = await result(indexedDB.open('lectern'));
     try {
       const tx = db.transaction(['projects', 'assets']);
       const [projects, assetIds] = await Promise.all([

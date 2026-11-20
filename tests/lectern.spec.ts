@@ -64,7 +64,7 @@ async function demo(page: BrowserPage) {
 async function stored(page: BrowserPage) {
   return page.evaluate(async () => {
     const db = await new Promise<IDBDatabase>((resolve, reject) => {
-      const r = indexedDB.open('lectern', 1);
+      const r = indexedDB.open('lectern');
       r.onsuccess = () => resolve(r.result);
       r.onerror = () => reject(r.error);
     });

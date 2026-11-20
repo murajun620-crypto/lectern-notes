@@ -10,6 +10,7 @@ import {
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
+  Cloud,
   Copy,
   CornerUpLeft,
   Download,
@@ -87,6 +88,8 @@ import { pageZoomSteps } from './usePageViewport';
 import UpdateButton from './UpdateButton';
 import { useFullscreen } from './useFullscreen';
 import { useProjectFile } from './useProjectFile';
+import { useOneDriveAuth } from './useOneDriveAuth';
+import { OneDrivePicker } from './OneDrivePicker';
 function IconButton({
   label,
   children,
@@ -247,6 +250,7 @@ type Dialog =
   | { kind: 'delete'; id: string; name: string }
   | { kind: 'deletePage'; id: string }
   | { kind: 'sharePdf'; file: File }
+  | { kind: 'oneDrive' }
   | { kind: 'video' }
   | { kind: 'help' }
   | null;
@@ -710,7 +714,19 @@ export default function App() {
     setTool('pen');
     void navigator.storage?.persist?.().catch(() => {});
   };
-  const projectFile = useProjectFile(project?.id, open, run);
+  const oneDrive = useOneDriveAuth();
+  const projectFile = useProjectFile(project?.id, open, run, oneDrive);
+  const signInToOneDrive = () => {
+    setDialog(null);
+    void run('Microsoftに接続しています…', async () => {
+      await flush();
+      await oneDrive.signIn();
+    });
+  };
+  const signOutOfOneDrive = () => {
+    setDialog(null);
+    void run('サインアウト中…', oneDrive.signOut);
+  };
   const newFromPdf = async (file: File, adding = false) => {
     const { pages, asset } = await importPdf(file);
     if (adding && current.current) {
@@ -1074,6 +1090,11 @@ export default function App() {
                 <button className="secondary" onClick={projectFile.chooseFile}>
                   <FolderOpen size={17} /> プロジェクトを開く
                 </button>
+                {oneDrive.configured && (
+                  <button className="secondary" onClick={() => setDialog({ kind: 'oneDrive' })}>
+                    <Cloud size={17} /> OneDriveから開く
+                  </button>
+                )}
                 <button
                   className="primary"
                   onClick={() => {
@@ -1263,13 +1284,29 @@ export default function App() {
                 <UpdateButton beforeReload={beforeReload} />
                 <button
                   className="secondary"
-                  title="プロジェクトを保存"
+                  title={
+                    projectFile.oneDriveTarget
+                      ? `OneDriveの「${projectFile.oneDriveTarget.name}」に保存`
+                      : 'プロジェクトを保存'
+                  }
                   aria-label="プロジェクトを保存"
+                  aria-description={
+                    projectFile.oneDriveTarget
+                      ? `保存先はOneDriveの「${projectFile.oneDriveTarget.name}」`
+                      : undefined
+                  }
+                  disabled={
+                    !projectFile.saveReady ||
+                    Boolean(projectFile.oneDriveTarget && oneDrive.configured && !oneDrive.ready)
+                  }
                   onClick={() => {
-                    if (current.current) projectFile.saveFile(current.current);
+                    const target = projectFile.oneDriveTarget;
+                    if (target && oneDrive.configured && oneDrive.ready && !oneDrive.account) {
+                      signInToOneDrive();
+                    } else if (current.current) projectFile.saveFile(current.current);
                   }}
                 >
-                  <Save size={17} />
+                  {projectFile.oneDriveTarget ? <Cloud size={17} /> : <Save size={17} />}
                   <span>プロジェクトを保存</span>
                 </button>
                 <details className="export-menu">
@@ -1278,6 +1315,22 @@ export default function App() {
                     <span>書き出す</span>
                   </summary>
                   <div className="dropdown">
+                    {projectFile.oneDriveTarget && (
+                      <>
+                        <button
+                          onClick={() => {
+                            if (current.current) projectFile.saveLocalFile(current.current);
+                          }}
+                        >
+                          <Download size={17} /> プロジェクトのコピーをダウンロード
+                        </button>
+                        {oneDrive.configured && oneDrive.ready && (
+                          <button onClick={signInToOneDrive}>
+                            <Cloud size={17} /> OneDriveにサインインし直す
+                          </button>
+                        )}
+                      </>
+                    )}
                     <button onClick={backup}>
                       <Download size={17} /> 編集可能なバックアップ
                     </button>
@@ -1817,6 +1870,24 @@ export default function App() {
       <div role="status" aria-live="polite" className="project-file-notice">
         {projectFile.fileNotice}
       </div>
+      {dialog?.kind === 'oneDrive' && (
+        <Modal title="OneDriveから開く" onClose={() => setDialog(null)}>
+          <OneDrivePicker
+            key={oneDrive.account?.id}
+            ready={oneDrive.ready}
+            account={oneDrive.account}
+            authError={oneDrive.error}
+            busy={Boolean(busy)}
+            getClient={oneDrive.getClient}
+            signIn={signInToOneDrive}
+            signOut={signOutOfOneDrive}
+            onOpen={(item) => {
+              setDialog(null);
+              projectFile.openOneDrive(item);
+            }}
+          />
+        </Modal>
+      )}
       {projectFile.conflict && (
         <Modal title="この端末に同じ資料があります" onClose={projectFile.cancelConflict}>
           <p>
@@ -1829,10 +1900,20 @@ export default function App() {
             <dt>ファイルの更新日時</dt>
             <dd>{new Date(projectFile.conflict.incoming.updatedAt).toLocaleString('ja-JP')}</dd>
           </dl>
-          <div className="modal-actions">
+          {projectFile.conflict.fromOneDrive && (
+            <p>
+              「この端末の編集を使う」を選ぶと、端末側の内容を開きます。その後「プロジェクトを保存」を押すと、今選んだOneDriveファイルを更新します。
+            </p>
+          )}
+          <div className="modal-actions project-conflict-actions">
             <button className="secondary" autoFocus onClick={projectFile.cancelConflict}>
               キャンセル
             </button>
+            {projectFile.conflict.fromOneDrive && (
+              <button className="secondary" onClick={projectFile.keepLocalAndLink}>
+                この端末の編集を使う
+              </button>
+            )}
             <button className="primary" onClick={projectFile.replaceConflict}>
               ファイルの内容で開く
             </button>
@@ -2029,7 +2110,7 @@ export default function App() {
             <p>
               作業中の資料はこの端末のライブラリに自動保存します。WindowsからiPadへ引き継ぐときは「プロジェクトを保存」で
               .lectern
-              ファイルをOneDriveなどの共有フォルダに置き、iPadのライブラリで「プロジェクトを開く」を押します。授業後はiPadでもう一度ファイルに保存します。以前のZIPは「バックアップを復元」から開けます。
+              ファイルをOneDriveなどの共有フォルダに置けます。「OneDriveから開く」が使える場合は、資料をそこから開くと「プロジェクトを保存」で同じファイルに書き戻せます。以前のZIPは「バックアップを復元」から開けます。
             </p>
             <h3>PDFの書き出し</h3>
             <p>

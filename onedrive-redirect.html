@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OneDriveへの接続</title>
+  </head>
+  <body>
+    <p id="status" role="status">OneDriveへのサインインを処理しています…</p>
+    <script type="module">
+      import { broadcastResponseToMainFrame } from '@azure/msal-browser/redirect-bridge';
+
+      broadcastResponseToMainFrame().catch(() => {
+        document.getElementById('status').textContent =
+          'サインインを完了できませんでした。Lecternに戻ってもう一度お試しください。';
+        document.querySelector('a').hidden = false;
+      });
+    </script>
+    <a href="./" hidden>Lecternに戻る</a>
+  </body>
+</html>

@@ -1,6 +1,6 @@
 # Lectern
 
-PDF、手書き、YouTubeのページ内再生、レーザーポインターをまとめた講義用Webアプリです。React / TypeScript / Viteで実装し、GitHub Pagesで静的配信します。第1段階（ローカル保存版）です。クラウド同期・ログインは実装していません。
+PDF、手書き、YouTubeのページ内再生、レーザーポインターをまとめた講義用Webアプリです。React / TypeScript / Viteで実装し、GitHub Pagesで静的配信します。資料は端末内に自動保存されます。OneDrive連携を設定すると、開いたプロジェクトを同じOneDriveファイルに書き戻せます。
 
 A4縦の講義ハンドアウトを基本にしています。サンプルもA4縦3ページです。iPadを横向きにしてもPDFの縦横比を保ち、全ページ表示と幅に合わせた拡大表示を選べます。白紙追加は現在のページサイズを引き継ぎ、既定値はA4縦です。A4以外のPDFも元のサイズと向きで読み込みます。
 
@@ -63,6 +63,21 @@ Safariからホーム画面に追加した版は、安全領域と表示可能�
 ライブラリと編集画面の**更新確認**は、キャッシュを使わず公開版の`version.json`を取得します。新しい版があると「保存して更新」で教材を保存してから新版を読み込みます。IndexedDBの資料や設定は削除しません。オフライン時はそのまま作業を続け、オンライン復帰後に再確認してください。更新確認ボタン追加前の版からは、最初に一度ページを再読み込みしてください。
 
 ## 保存・WindowsとiPadの移行
+
+### 大学・職場のOneDriveに直接保存
+
+1. WindowsからOneDriveに `.lectern` を置いておきます。iPadのLecternで「OneDriveから開く」を押し、勤務先または学校のMicrosoftアカウントでサインインします。
+2. Lecternの一覧でフォルダをたどり、その `.lectern` を選びます。同じ資料の端末側の内容が異なるときは、開く内容を選べます。「この端末の編集を使う」を選ぶと、iPadにすでにある編集を引き継いで保存先をOneDriveに設定します。
+3. 授業後に「プロジェクトを保存」を押します。「OneDriveに保存しました」と表示されたら、Windowsでも「OneDriveから開く」で同じファイルを開けます。
+
+保存先はこの端末の資料に記憶します。作業中の自動保存はこの端末のライブラリに入り、OneDriveは「プロジェクトを保存」を押したときに更新されます。別の端末で先に保存されたことを検出した場合は上書きを止めます。「書き出す → プロジェクトのコピーをダウンロード」で手元の編集を別ファイルに残してから、必要に応じてOneDrive側の内容を確認してください。複数端末の編集は自動では統合されません。OneDriveの一覧はサインインしたアカウントの「マイ ファイル」を表示します。
+
+#### 管理者向けの初回設定
+
+1. Microsoft Entra管理センターの「アプリの登録」でLecternを登録します。大学・職場だけで使う場合は「この組織ディレクトリ内のアカウントのみ」を選びます。
+2. 「認証」で「シングル ページ アプリケーション」を追加し、リダイレクトURIに `https://murajun620-crypto.github.io/lectern-notes/onedrive-redirect.html` を登録します。ローカルで接続を試す場合は `http://localhost:5173/onedrive-redirect.html` も登録します。
+3. 「APIのアクセス許可」で Microsoft Graph の**委任されたアクセス許可** `Files.ReadWrite` を追加します。組織の設定でユーザー自身が同意できない場合は、管理者が許可します。認証はMSALの認可コードフローとPKCEを使い、クライアントシークレットは作成不要です。
+4. GitHubリポジトリの Settings → Secrets and variables → Actions → Variables に `LECTERN_ONEDRIVE_CLIENT_ID`（アプリケーション ID）と `LECTERN_ONEDRIVE_AUTHORITY`（`https://login.microsoftonline.com/<ディレクトリ（テナント）ID>`）を設定し、Pagesワークフローを実行します。ローカルでは対応する `VITE_ONEDRIVE_CLIENT_ID` と `VITE_ONEDRIVE_AUTHORITY` を指定します。アプリケーションIDが設定されると「OneDriveから開く」が表示されます。
 
 ### プロジェクトファイルで授業の続きを開く
 

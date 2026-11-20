@@ -56,7 +56,7 @@ async function draw(page: Page, y: number) {
 
 async function strokeCount(page: Page) {
   return page.evaluate(async () => {
-    const request = indexedDB.open('lectern', 1);
+    const request = indexedDB.open('lectern');
     return new Promise<number>((resolve, reject) => {
       request.onsuccess = () => {
         const database = request.result;
