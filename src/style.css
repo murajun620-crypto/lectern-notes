@@ -731,6 +731,7 @@ h3 {
   display: flex;
 }
 .toolbar {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -2106,9 +2107,6 @@ dialog > p {
   .stage-note {
     display: none;
   }
-  .settings-dropdown {
-    right: -5px;
-  }
   .page-item {
     padding: 4px;
   }
@@ -2210,20 +2208,15 @@ body,
   max-height: calc(var(--app-height, 100dvh) - 180px);
   overflow: auto;
 }
-@media (max-width: 740px) {
-  .toolbar {
-    position: relative;
-  }
-  .settings-menu,
-  .page-view-menu {
-    position: static;
-  }
-  .settings-dropdown,
-  .page-view-dropdown {
-    right: 8px;
-    top: calc(100% + 4px);
-    max-width: calc(100vw - 16px);
-  }
+.settings-menu,
+.page-view-menu {
+  position: static;
+}
+.settings-dropdown,
+.page-view-dropdown {
+  right: 8px;
+  top: calc(100% + 4px);
+  max-width: calc(100% - 16px);
 }
 .preset-settings {
   margin: 15px 0;
