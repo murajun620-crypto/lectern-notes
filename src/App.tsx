@@ -812,27 +812,30 @@ export default function App() {
         currentPage: pages.findIndex((pg) => pg.id === p.pages[p.currentPage].id),
       };
     });
+  const insertVideoOnPage = useCallback(
+    (pageId: string, url: string) => {
+      const source = parseYoutubeUrl(url);
+      if (!source) return false;
+      changePage(pageId, (prev) => ({
+        ...prev,
+        videos: [
+          ...prev.videos,
+          { id: uid(), videoId: source.id, ...initialVideoRect(prev, source.portrait) },
+        ],
+      }));
+      return true;
+    },
+    [changePage],
+  );
   const insertVideo = (e: FormEvent) => {
     e.preventDefault();
-    const source = parseYoutubeUrl(videoUrl);
-    if (!source) {
+    if (!page) return;
+    if (!insertVideoOnPage(page.id, videoUrl)) {
       setVideoError(
         '有効なYouTube URLを入力してください。watch / youtu.be / shortsに対応しています。',
       );
       return;
     }
-    if (!page) return;
-    changePage(page.id, (prev) => ({
-      ...prev,
-      videos: [
-        ...prev.videos,
-        {
-          id: uid(),
-          videoId: source.id,
-          ...initialVideoRect(prev, source.portrait),
-        },
-      ],
-    }));
     setDialog(null);
     setTool('hand');
   };
@@ -1752,6 +1755,7 @@ export default function App() {
                   inkPriority={inkPriority}
                   pencilDiagnostics={pencilDiagnostics}
                   onCopyInk={setInkClipboard}
+                  onInsertPdfVideo={insertVideoOnPage}
                   onChange={changePage}
                   onNavigate={navigate}
                   onError={setError}
@@ -2033,8 +2037,7 @@ export default function App() {
             </p>
             <h3>動画で伝える</h3>
             <p>
-              PDFに書かれたURLは、ツールバーの「本文選択」でドラッグまたは長押ししてコピーできます。「動画を挿入」のYouTube
-              URL欄に貼り付けてください。
+              「移動」または「本文選択」でPDF内のYouTubeリンクを押し、「YouTube動画を挿入」を選ぶと、そのページに動画を追加できます。URLをコピーして「動画を挿入」の入力欄に貼り付ける方法も使えます。
             </p>
             <p>
               中央の ▶

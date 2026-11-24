@@ -9,7 +9,8 @@ import {
 } from 'react';
 import type { PointerEvent as ReactPointerEvent, Ref } from 'react';
 import { flushSync } from 'react-dom';
-import { drawLaser, strokeHit, transformStroke, uid } from './model';
+import { Video as VideoIcon } from 'lucide-react';
+import { clamp, drawLaser, strokeHit, transformStroke, uid } from './model';
 import type { Page, PenKind, Point, Stroke, Tool, Video } from './model';
 import { renderPage } from './pdf';
 import VideoBox from './VideoBox';
@@ -25,7 +26,7 @@ import { useInkLayer } from './useInkLayer';
 import { usePdfDetail } from './usePdfDetail';
 import { usePageStack } from './usePageStack';
 import PageStackPreview from './PageStackPreview';
-import PDFTextLayer from './PDFTextLayer';
+import PDFTextLayer, { hitPdfYoutubeLink } from './PDFTextLayer';
 import { applyErasure } from './eraser';
 import InkSelectionControls from './InkSelectionControls';
 import {
@@ -106,6 +107,7 @@ type Props = {
   onCopyInk: (strokes: Stroke[]) => void;
   setZoom: (z: number) => void;
   onChange: (pageId: string, edit: (previous: Page) => Page) => void;
+  onInsertPdfVideo: (pageId: string, url: string) => void;
   onNavigate: (delta: number) => void;
   onError: (s: string) => void;
 };
@@ -138,6 +140,7 @@ export default function Stage({
   onCopyInk,
   setZoom,
   onChange,
+  onInsertPdfVideo,
   onNavigate,
   onError,
 }: Props) {
@@ -157,6 +160,39 @@ export default function Stage({
   const [selectedVideo, setSelectedVideo] = useState<string | null>(null);
   const [playingVideo, setPlayingVideo] = useState<string | null>(null);
   const selectingText = tool === 'text';
+  const canUsePdfLinks = selectingText || tool === 'hand';
+  const linkPress = useRef<
+    (Position & { pointerId: number; started: number; tolerance: number }) | null
+  >(null);
+  const [pdfYoutubeAction, setPdfYoutubeAction] = useState<
+    (NonNullable<ReturnType<typeof hitPdfYoutubeLink>> & Position) | null
+  >(null);
+  const pdfYoutubeButton = useRef<HTMLButtonElement>(null);
+  useLayoutEffect(() => {
+    setPdfYoutubeAction(null);
+    linkPress.current = null;
+  }, [page.id, tool, zoom, fitWidth, size]);
+  useEffect(() => {
+    if (!pdfYoutubeAction) return;
+    const dismiss = (event: Event) => {
+      if (event.target instanceof Node && !pdfYoutubeButton.current?.contains(event.target))
+        setPdfYoutubeAction(null);
+    };
+    const dismissOnWheel = () => setPdfYoutubeAction(null);
+    const escape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.stopPropagation();
+      setPdfYoutubeAction(null);
+    };
+    document.addEventListener('pointerdown', dismiss, true);
+    document.addEventListener('wheel', dismissOnWheel, { capture: true, passive: true });
+    document.addEventListener('keydown', escape, true);
+    return () => {
+      document.removeEventListener('pointerdown', dismiss, true);
+      document.removeEventListener('wheel', dismissOnWheel, true);
+      document.removeEventListener('keydown', escape, true);
+    };
+  }, [pdfYoutubeAction]);
   const [videoControls, setVideoControls] = useState<HTMLDivElement | null>(null);
   const closePlayback = useCallback((key: string) => {
     setPlayingVideo((current) => (current === key ? null : current));
@@ -297,8 +333,8 @@ export default function Stage({
     view,
   ]);
   useLayoutEffect(() => {
-    if (selectingText) paintStack(view.current);
-  }, [selectingText, paintStack, view]);
+    if (canUsePdfLinks) paintStack(view.current);
+  }, [canUsePdfLinks, paintStack, view]);
   const continuous = Boolean(stack.active);
   useEffect(() => {
     const stage = viewport.current!;
@@ -1461,6 +1497,16 @@ export default function Stage({
         height: (bottom - top) * scale * displayScale + 10,
       };
     })();
+  const actionWidth = Math.min(168, Math.max(0, size.w - 16));
+  const actionHeight = 44;
+  const trackPdfLinkMovement = (e: ReactPointerEvent) => {
+    const press = linkPress.current;
+    if (
+      press?.pointerId === e.pointerId &&
+      Math.hypot(e.clientX - press.x, e.clientY - press.y) >= press.tolerance
+    )
+      linkPress.current = null;
+  };
   return (
     <div
       className={`stage tool-${tool}`}
@@ -1468,6 +1514,8 @@ export default function Stage({
       data-testid="stage"
       onPointerDownCapture={(e) => {
         const target = e.target as Element;
+        const wasCoasting = coastSpeed.current > 0;
+        linkPress.current = null;
         if (selectingText) {
           if (stopCoast()) commitView(false);
         } else if (e.pointerType === 'pen') {
@@ -1503,8 +1551,25 @@ export default function Stage({
         }
         if (selectedVideo && !target.closest('.video-box,[data-video-control]'))
           setSelectedVideo(null);
+        if (
+          canUsePdfLinks &&
+          !wasCoasting &&
+          e.isPrimary &&
+          e.button === 0 &&
+          (selectingText || e.pointerType !== 'pen') &&
+          !target.closest('button,a,.video-box,[data-video-control],[data-selection-control]')
+        ) {
+          linkPress.current = {
+            x: e.clientX,
+            y: e.clientY,
+            pointerId: e.pointerId,
+            started: performance.now(),
+            tolerance: e.pointerType === 'touch' ? 8 : 5,
+          };
+        }
       }}
       onPointerMoveCapture={(e) => {
+        if (linkPress.current) trackPdfLinkMovement(e);
         if (selectingText && !gesture.current) return;
         if (e.pointerType !== 'touch') return;
         const g = gesture.current;
@@ -1520,6 +1585,7 @@ export default function Stage({
         }
       }}
       onPointerUpCapture={(e) => {
+        if (linkPress.current) trackPdfLinkMovement(e);
         if (selectingText && !gesture.current) {
           if (e.pointerType === 'pen') palm.current.penUp(e.pointerId, performance.now());
           if (e.pointerType === 'touch') palm.current.touchUp(e.pointerId);
@@ -1537,6 +1603,7 @@ export default function Stage({
         }
       }}
       onPointerCancelCapture={(e) => {
+        linkPress.current = null;
         if (e.pointerType === 'pen') palm.current.penUp(e.pointerId, performance.now());
         if (e.pointerType === 'touch') {
           endTouchPointerForPencil(e.pointerId, e.timeStamp);
@@ -1559,6 +1626,29 @@ export default function Stage({
           e.stopPropagation();
         }
       }}
+      onClick={(e) => {
+        const press = linkPress.current;
+        linkPress.current = null;
+        if (
+          !canUsePdfLinks ||
+          !press ||
+          performance.now() - press.started >= 500 ||
+          Math.hypot(e.clientX - press.x, e.clientY - press.y) >= press.tolerance ||
+          e.ctrlKey ||
+          e.metaKey ||
+          e.shiftKey ||
+          e.altKey ||
+          (e.target as Element).closest('button,a,.video-box,[data-video-control]')
+        )
+          return;
+        const stage = e.currentTarget;
+        const selection = window.getSelection();
+        if (selection && !selection.isCollapsed && stage.contains(selection.anchorNode)) return;
+        const target = hitPdfYoutubeLink(stage, e.clientX, e.clientY);
+        if (!target) return;
+        const bounds = stage.getBoundingClientRect();
+        setPdfYoutubeAction({ ...target, x: e.clientX - bounds.left, y: e.clientY - bounds.top });
+      }}
       onPointerDown={(e) => {
         if (selectingText) return;
         const capture = () => e.currentTarget.setPointerCapture(e.pointerId);
@@ -1569,6 +1659,7 @@ export default function Stage({
         }
       }}
       onTouchStart={(e) => {
+        if (e.touches.length !== 1) linkPress.current = null;
         const stylus = Array.from(e.changedTouches).find(
           (contact) => (contact as StylusTouch).touchType === 'stylus',
         );
@@ -1850,6 +1941,7 @@ export default function Stage({
           up(e, true);
       }}
       onContextMenu={(e) => {
+        linkPress.current = null;
         if (!selectingText) e.preventDefault();
       }}
     >
@@ -1906,13 +1998,15 @@ export default function Stage({
         }}
       >
         <canvas ref={inkPreview} className="ink-page-preview" aria-hidden="true" />
-        {!stack.active && selectingText && <PDFTextLayer key={page.id} page={page} scale={fit} />}
+        {!stack.active && canUsePdfLinks && (
+          <PDFTextLayer key={page.id} page={page} scale={fit} selectable={selectingText} />
+        )}
         {!stack.active && renderVideos(page, fit)}
         {loading && (!stack.active || !pdfCanvas.current?.dataset.page) && (
           <div className="pdf-loading">ページを読み込み中…</div>
         )}
       </div>
-      {stack.active && selectingText && (
+      {stack.active && canUsePdfLinks && (
         <div ref={stack.textLayer} className="stack-board stack-text-board">
           {stack.nearby.map((item) => (
             <div
@@ -1927,7 +2021,7 @@ export default function Stage({
                 height: item.page.height * item.fit,
               }}
             >
-              <PDFTextLayer page={item.page} scale={item.fit} />
+              <PDFTextLayer page={item.page} scale={item.fit} selectable={selectingText} />
             </div>
           ))}
         </div>
@@ -1954,6 +2048,34 @@ export default function Stage({
         </div>
       )}
       <div ref={setVideoControls} className="stage-video-controls" />
+      {pdfYoutubeAction && (
+        <button
+          ref={pdfYoutubeButton}
+          type="button"
+          className="pdf-youtube-action"
+          data-video-control
+          data-ink-controls
+          style={{
+            width: actionWidth,
+            left: clamp(pdfYoutubeAction.x, 8, Math.max(8, size.w - actionWidth - 8)),
+            top: clamp(
+              pdfYoutubeAction.y + actionHeight + 16 <= size.h
+                ? pdfYoutubeAction.y + 8
+                : pdfYoutubeAction.y - actionHeight - 8,
+              8,
+              Math.max(8, size.h - actionHeight - 8),
+            ),
+          }}
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={() => {
+            setPdfYoutubeAction(null);
+            onInsertPdfVideo(pdfYoutubeAction.pageId, pdfYoutubeAction.url);
+          }}
+        >
+          <VideoIcon size={17} />
+          YouTube動画を挿入
+        </button>
+      )}
       <canvas ref={laserCanvas} className="laser-canvas" />
       <div
         ref={eraserCursor}

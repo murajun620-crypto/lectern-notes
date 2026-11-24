@@ -1,16 +1,14 @@
 import { expect, test } from '@playwright/test';
 import type { Locator, Page } from '@playwright/test';
 import { degrees, PDFDocument, PDFName, PDFNumber, StandardFonts } from 'pdf-lib';
+import { addPdfLink } from '../src/pdf-background';
 
 const videoUrl = 'https://youtu.be/M7lc1UVf-VE';
+const indexedPdfText = '[data-testid="pdf-text-layer"][data-pdf-youtube]';
+const insertPdfVideo = (page: Page) =>
+  page.getByTestId('stage').getByRole('button', { name: 'YouTube動画を挿入', exact: true });
 
-async function openHandout(page: Page, rotation: 0 | 90) {
-  const doc = await PDFDocument.create();
-  const font = await doc.embedFont(StandardFonts.Helvetica);
-  const handout = doc.addPage([520, 700]);
-  handout.drawText(videoUrl, { font, x: 100, y: 350, size: 21 });
-  handout.setRotation(degrees(rotation));
-  if (rotation) handout.node.set(PDFName.of('UserUnit'), PDFNumber.of(2));
+async function openPdf(page: Page, doc: PDFDocument) {
   await page.goto('/');
   const chooseFile = page.waitForEvent('filechooser');
   await page.getByRole('button', { name: 'PDFを読み込む', exact: true }).click();
@@ -23,6 +21,28 @@ async function openHandout(page: Page, rotation: 0 | 90) {
   });
   await expect(page.getByTestId('pdf-page')).toBeVisible();
   await expect(page.getByText('ページを読み込み中…', { exact: true })).toBeHidden();
+}
+
+async function openHandout(page: Page, rotation: 0 | 90) {
+  const doc = await PDFDocument.create();
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  const handout = doc.addPage([520, 700]);
+  handout.drawText(videoUrl, { font, x: 100, y: 350, size: 21 });
+  handout.setRotation(degrees(rotation));
+  if (rotation) handout.node.set(PDFName.of('UserUnit'), PDFNumber.of(2));
+  await openPdf(page, doc);
+}
+
+function centerOfTextRun(locator: Locator, value: string) {
+  return locator.evaluate((span, value) => {
+    const node = span.firstChild!;
+    const offset = node.textContent!.indexOf(value);
+    const range = document.createRange();
+    range.setStart(node, offset);
+    range.setEnd(node, offset + value.length);
+    const { x, y, width, height } = range.getBoundingClientRect();
+    return { x: x + width / 2, y: y + height / 2 };
+  }, value);
 }
 
 async function dragToSelect(page: Page, text: Locator, rotation: 0 | 90) {
@@ -96,6 +116,7 @@ for (const { mode, rotation } of [
       rotation === 90 ? (word.y - paper.y) / paper.height : (word.x - paper.x) / paper.width;
     expect(progress).toBeCloseTo(100 / 520, 2);
     await dragToSelect(page, text, rotation);
+    await expect(insertPdfVideo(page)).toHaveCount(0);
 
     // Observe the browser's trusted copy shortcut without modifying the host clipboard.
     await page.evaluate(() =>
@@ -121,3 +142,87 @@ for (const { mode, rotation } of [
     await expect(page.getByRole('button', { name: '動画をページ内で再生' })).toBeVisible();
   });
 }
+
+test('a printed YouTube URL on the neighboring sheet offers insertion onto that sheet', async ({
+  page,
+}) => {
+  const doc = await PDFDocument.create();
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  doc.addPage([520, 700]).drawText('First page', { font, x: 100, y: 350, size: 21 });
+  const prefix = 'Video: ';
+  doc.addPage([520, 700]).drawText(prefix + videoUrl, { font, x: 100, y: 620, size: 21 });
+  await openPdf(page, doc);
+  await page.getByRole('button', { name: 'PDFテキストを選択', exact: true }).click();
+  const text = page.locator(indexedPdfText).locator('span').filter({ hasText: videoUrl });
+  const stage = page.getByTestId('stage');
+  const bounds = (await stage.boundingBox())!;
+  await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+  await page.mouse.wheel(0, 200);
+  await expect(text).toBeInViewport();
+  await expect(page.getByLabel('ページ番号')).toHaveValue('1');
+
+  const beforeUrl = await centerOfTextRun(text, prefix);
+  await page.mouse.click(beforeUrl.x, beforeUrl.y);
+  const insert = insertPdfVideo(page);
+  await expect(insert).toHaveCount(0);
+  const url = await centerOfTextRun(text, videoUrl);
+  await page.mouse.click(url.x, url.y);
+  await expect(insert).toBeVisible();
+  await expect(page.getByTestId('video-box')).toHaveCount(0);
+  await page.mouse.click(bounds.x + 12, bounds.y + bounds.height / 2);
+  await expect(insert).toHaveCount(0);
+  await page.getByRole('button', { name: '移動', exact: true }).click();
+  await expect(text).toBeInViewport();
+  const handUrl = await centerOfTextRun(text, videoUrl);
+  await page.mouse.click(handUrl.x, handUrl.y);
+  await insert.click();
+
+  await page.getByLabel('ページ表示').selectOption('single');
+  await page.getByRole('button', { name: 'ページ 2', exact: true }).click();
+  const video = page.getByTestId('video-box');
+  await expect(video).toHaveCount(1);
+  await expect(video.locator('img')).toHaveAttribute('src', /M7lc1UVf-VE/);
+  await page.getByRole('button', { name: 'ページ 1', exact: true }).click();
+  await expect(video).toHaveCount(0);
+});
+
+test.describe('touch input', () => {
+  test.use({ hasTouch: true, viewport: { width: 1024, height: 768 } });
+
+  test('a tap on a YouTube hyperlink with a label offers insertion without external navigation', async ({
+    page,
+  }) => {
+    const doc = await PDFDocument.create();
+    const font = await doc.embedFont(StandardFonts.Helvetica);
+    const handout = doc.addPage([520, 700]);
+    const label = 'Open lecture clip';
+    handout.drawText(label, { font, x: 100, y: 350, size: 21 });
+    handout.setRotation(degrees(90));
+    const rect: [number, number, number, number] = [
+      98,
+      345,
+      102 + font.widthOfTextAtSize(label, 21),
+      373,
+    ];
+    addPdfLink(handout, rect, videoUrl);
+    await openPdf(page, doc);
+    await page.getByLabel('ページ表示').selectOption('single');
+    await page.getByRole('button', { name: '移動', exact: true }).click();
+    await expect(page.locator(indexedPdfText)).toBeAttached();
+    const sheet = (await page.getByTestId('pdf-page').boundingBox())!;
+    // Rotating the sheet 90° maps PDF y to screen x and PDF x to screen y.
+    const x = sheet.x + (sheet.width * (rect[1] + rect[3])) / (2 * 700);
+    const y = sheet.y + (sheet.height * (rect[0] + rect[2])) / (2 * 520);
+    const startUrl = page.url();
+    await page.touchscreen.tap(x, y);
+    const insert = insertPdfVideo(page);
+    await expect(insert).toBeVisible();
+    await expect(page.getByTestId('video-box')).toHaveCount(0);
+    await expect(page).toHaveURL(startUrl);
+    expect(page.context().pages()).toHaveLength(1);
+    await insert.tap();
+    const video = page.getByTestId('video-box');
+    await expect(video).toHaveCount(1);
+    await expect(video.locator('img')).toHaveAttribute('src', /M7lc1UVf-VE/);
+  });
+});

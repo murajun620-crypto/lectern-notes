@@ -1130,6 +1130,28 @@ h3 {
   transform-origin: 0 0;
   pointer-events: auto;
 }
+.tool-hand .pdf-text-layer {
+  -webkit-user-select: none;
+  user-select: none;
+}
+.pdf-youtube-action {
+  position: absolute;
+  z-index: 13;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 44px;
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #fff;
+  color: var(--green);
+  box-shadow: 0 4px 14px #21362d25;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
 .pdf-text-layer[data-main-rotation='90'] {
   transform: rotate(90deg) translateY(-100%);
 }
