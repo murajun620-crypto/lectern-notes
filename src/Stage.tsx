@@ -1659,11 +1659,11 @@ export default function Stage({
         }
       }}
       onTouchStart={(e) => {
-        if (e.touches.length !== 1) linkPress.current = null;
         const stylus = Array.from(e.changedTouches).find(
           (contact) => (contact as StylusTouch).touchType === 'stylus',
         );
         if (stylus) {
+          if (!selectingText) linkPress.current = null;
           const target = e.target as Element;
           if (
             writingWithPencil &&
@@ -1689,6 +1689,7 @@ export default function Stage({
         const contacts = Array.from(e.touches) as Array<
           (typeof e.touches)[0] & { radiusX?: number; radiusY?: number; touchType?: string }
         >;
+        if (contacts.length !== 1) linkPress.current = null;
         const interactive = (e.target as Element).closest(
           '.video-box,[data-video-control],[data-selection-control]',
         );
