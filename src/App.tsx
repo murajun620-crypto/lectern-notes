@@ -1485,11 +1485,11 @@ export default function App() {
             >
               <LayoutGrid size={21} />
             </IconButton>
-            <details className="page-view-menu">
+            <details className="blank-page-menu">
               <summary className="icon-button" title="白紙を挿入" aria-label="白紙を挿入">
                 <FilePlus2 size={21} />
               </summary>
-              <div className="dropdown page-view-dropdown">
+              <div className="dropdown blank-page-dropdown">
                 <button type="button" onClick={() => addBlank('before')}>
                   <ArrowUp size={17} /> 前に挿入
                 </button>

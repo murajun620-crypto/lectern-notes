@@ -2234,11 +2234,13 @@ body,
   overflow: auto;
 }
 .settings-menu,
-.page-view-menu {
+.page-view-menu,
+.blank-page-menu {
   position: static;
 }
 .settings-dropdown,
-.page-view-dropdown {
+.page-view-dropdown,
+.blank-page-dropdown {
   right: 8px;
   top: calc(100% + 4px);
   max-width: calc(100% - 16px);
