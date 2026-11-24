@@ -70,6 +70,8 @@ type PencilContact = {
   lastWasTouch?: boolean;
 };
 const nativePencil = Symbol('native Pencil contact');
+const pdfLinkControls = 'button,a,.video-box,[data-video-control],[data-selection-control]';
+const pdfLinkTapTime = 500;
 type Pinch = { distance: number; zoom: number; mid: Position; anchor: Position };
 const clearPdfSelection = (stage: HTMLElement | null) => {
   const selection = window.getSelection();
@@ -160,18 +162,29 @@ export default function Stage({
   const [selectedVideo, setSelectedVideo] = useState<string | null>(null);
   const [playingVideo, setPlayingVideo] = useState<string | null>(null);
   const selectingText = tool === 'text';
-  const canUsePdfLinks = selectingText || tool === 'hand';
+  const fingerLinks = tool === 'pen';
+  const canUsePdfLinks = selectingText || tool === 'hand' || fingerLinks;
   const linkPress = useRef<
-    (Position & { pointerId: number; started: number; tolerance: number }) | null
+    | (Position & {
+        pointerId: number;
+        started: number;
+        tolerance: number;
+        fingerLink?: ReturnType<typeof hitPdfYoutubeLink>;
+      })
+    | null
   >(null);
   const [pdfYoutubeAction, setPdfYoutubeAction] = useState<
     (NonNullable<ReturnType<typeof hitPdfYoutubeLink>> & Position) | null
   >(null);
   const pdfYoutubeButton = useRef<HTMLButtonElement>(null);
+  const clearLinkHover = () => viewport.current?.removeAttribute('data-pdf-link-hover');
   useLayoutEffect(() => {
+    viewport.current?.removeAttribute('data-pdf-link-hover');
     setPdfYoutubeAction(null);
-    linkPress.current = null;
   }, [page.id, tool, zoom, fitWidth, size]);
+  useLayoutEffect(() => {
+    linkPress.current = null;
+  }, [tool, zoom, fitWidth, size]);
   useEffect(() => {
     if (!pdfYoutubeAction) return;
     const dismiss = (event: Event) => {
@@ -223,6 +236,7 @@ export default function Stage({
     points: Point[];
     paperRect: DOMRect;
     stroke?: Stroke;
+    deferInkForLink?: boolean;
     selection: Set<string>;
     shape: InkSelection | null;
     moved?: boolean;
@@ -994,7 +1008,10 @@ export default function Stage({
       playbackTap,
     };
     if (kind === 'draw') {
-      inkPriority.begin();
+      const press = linkPress.current;
+      const deferForLink =
+        e.pointerType === 'touch' && press?.pointerId === e.pointerId && !!press.fingerLink;
+      if (!deferForLink) inkPriority.begin();
       const s: Stroke = {
         id: uid(),
         tool: selectedTool as 'pen' | 'highlighter',
@@ -1004,8 +1021,9 @@ export default function Stage({
         points: gesture.current.points,
       };
       gesture.current.stroke = s;
+      if (deferForLink) gesture.current.deferInkForLink = true;
       // A Pencil down point is only a dot if contact ends without movement.
-      if (e.pointerType !== 'pen') previewStroke(s);
+      if (e.pointerType !== 'pen' && !deferForLink) previewStroke(s);
     }
     if (kind === 'erase') {
       inkPriority.begin();
@@ -1298,6 +1316,11 @@ export default function Stage({
         if (!g.pencil.pointerEnded && !g.pencil.touchEnded && appendPencilSamples(e.nativeEvent, g))
           previewPencilStroke(g.stroke!);
       } else {
+        if (g.deferInkForLink) {
+          if (linkPress.current?.pointerId === g.id) return;
+          g.deferInkForLink = false;
+          inkPriority.begin();
+        }
         const before = g.points.length;
         appendSamples(e, g);
         if (g.points.length > before) previewStroke(g.stroke!);
@@ -1346,7 +1369,12 @@ export default function Stage({
       return;
     }
     if (g.kind === 'draw' && !cancel) {
-      finishStroke(g);
+      const press = linkPress.current;
+      if (g.deferInkForLink && press?.pointerId === g.id) {
+        // A quick finger tap on a link takes precedence over a one-point finger stroke.
+        gesture.current = null;
+        clearInkGesture();
+      } else finishStroke(g);
       return;
     }
     gesture.current = null;
@@ -1407,6 +1435,7 @@ export default function Stage({
       (t) => t.identifier === stylusContact.current || (t as StylusTouch).touchType === 'stylus',
     );
     if (!contact) return false;
+    if (!selectingText) linkPress.current = null;
     if (stylusContact.current === contact.identifier) {
       stylusContact.current = null;
       palm.current.penUp(nativePencil, performance.now());
@@ -1503,7 +1532,8 @@ export default function Stage({
     const press = linkPress.current;
     if (
       press?.pointerId === e.pointerId &&
-      Math.hypot(e.clientX - press.x, e.clientY - press.y) >= press.tolerance
+      (Math.hypot(e.clientX - press.x, e.clientY - press.y) >= press.tolerance ||
+        performance.now() - press.started >= pdfLinkTapTime)
     )
       linkPress.current = null;
   };
@@ -1515,6 +1545,7 @@ export default function Stage({
       onPointerDownCapture={(e) => {
         const target = e.target as Element;
         const wasCoasting = coastSpeed.current > 0;
+        if (tool === 'hand') clearLinkHover();
         linkPress.current = null;
         if (selectingText) {
           if (stopCoast()) commitView(false);
@@ -1552,24 +1583,36 @@ export default function Stage({
         if (selectedVideo && !target.closest('.video-box,[data-video-control]'))
           setSelectedVideo(null);
         if (
-          canUsePdfLinks &&
+          (selectingText ||
+            (tool === 'hand' && e.pointerType !== 'pen') ||
+            (fingerLinks && e.pointerType === 'touch' && !playingVideo)) &&
           !wasCoasting &&
           e.isPrimary &&
           e.button === 0 &&
-          (selectingText || e.pointerType !== 'pen') &&
-          !target.closest('button,a,.video-box,[data-video-control],[data-selection-control]')
+          !e.ctrlKey &&
+          !e.metaKey &&
+          !e.shiftKey &&
+          !e.altKey &&
+          !target.closest(pdfLinkControls)
         ) {
+          const fingerLink = fingerLinks
+            ? hitPdfYoutubeLink(e.currentTarget, e.clientX, e.clientY)
+            : undefined;
+          if (fingerLinks && !fingerLink) return;
           linkPress.current = {
             x: e.clientX,
             y: e.clientY,
             pointerId: e.pointerId,
             started: performance.now(),
-            tolerance: e.pointerType === 'touch' ? 8 : 5,
+            tolerance: e.pointerType === 'touch' && !fingerLinks ? 8 : 5,
+            fingerLink,
           };
         }
       }}
       onPointerMoveCapture={(e) => {
-        if (linkPress.current) trackPdfLinkMovement(e);
+        if (!selectingText && e.pointerType === 'pen' && (e.buttons & 1) !== 0)
+          linkPress.current = null;
+        else if (linkPress.current) trackPdfLinkMovement(e);
         if (selectingText && !gesture.current) return;
         if (e.pointerType !== 'touch') return;
         const g = gesture.current;
@@ -1597,6 +1640,7 @@ export default function Stage({
           const accepted = palm.current.allowsTouch(e.pointerId);
           palm.current.touchUp(e.pointerId, performance.now());
           if (!accepted) {
+            linkPress.current = null;
             e.preventDefault();
             e.stopPropagation();
           }
@@ -1632,19 +1676,20 @@ export default function Stage({
         if (
           !canUsePdfLinks ||
           !press ||
-          performance.now() - press.started >= 500 ||
+          (!selectingText && (e.nativeEvent as PointerEvent).pointerType === 'pen') ||
+          performance.now() - press.started >= pdfLinkTapTime ||
           Math.hypot(e.clientX - press.x, e.clientY - press.y) >= press.tolerance ||
           e.ctrlKey ||
           e.metaKey ||
           e.shiftKey ||
           e.altKey ||
-          (e.target as Element).closest('button,a,.video-box,[data-video-control]')
+          (e.target as Element).closest(pdfLinkControls)
         )
           return;
         const stage = e.currentTarget;
         const selection = window.getSelection();
         if (selection && !selection.isCollapsed && stage.contains(selection.anchorNode)) return;
-        const target = hitPdfYoutubeLink(stage, e.clientX, e.clientY);
+        const target = press.fingerLink ?? hitPdfYoutubeLink(stage, e.clientX, e.clientY);
         if (!target) return;
         const bounds = stage.getBoundingClientRect();
         setPdfYoutubeAction({ ...target, x: e.clientX - bounds.left, y: e.clientY - bounds.top });
@@ -1787,6 +1832,7 @@ export default function Stage({
             t.identifier === stylusContact.current || (t as StylusTouch).touchType === 'stylus',
         );
         if (contact) {
+          if (!selectingText) linkPress.current = null;
           if (
             stylusContact.current !== contact.identifier &&
             (contact as StylusTouch).touchType === 'stylus' &&
@@ -1916,6 +1962,7 @@ export default function Stage({
         if (!turned && (g.panning || g.interrupted)) finishPan(g.history, e.timeStamp);
       }}
       onTouchCancel={(e) => {
+        linkPress.current = null;
         if (endNativePencil(e, true)) return;
         if ((swipe.current?.panning || swipe.current?.interrupted) && interacting.current)
           commitView();
@@ -1931,9 +1978,20 @@ export default function Stage({
         }
       }}
       onPointerMove={(e) => {
+        if (tool === 'hand' && e.pointerType === 'mouse' && !e.buttons) {
+          const stage = e.currentTarget;
+          const overLink =
+            !(e.target as Element).closest(pdfLinkControls) &&
+            !!hitPdfYoutubeLink(stage, e.clientX, e.clientY);
+          stage.toggleAttribute('data-pdf-link-hover', overLink);
+        }
         if (!selectingText || gesture.current) move(e);
       }}
-      onPointerLeave={hideEraser}
+      onPointerLeave={() => {
+        clearLinkHover();
+        hideEraser();
+      }}
+      onWheelCapture={clearLinkHover}
       onPointerUp={(e) => up(e)}
       onPointerCancel={(e) => up(e, true)}
       onLostPointerCapture={(e) => {

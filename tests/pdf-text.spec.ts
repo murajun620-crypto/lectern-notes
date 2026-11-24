@@ -174,6 +174,19 @@ test('a printed YouTube URL on the neighboring sheet offers insertion onto that 
   await page.getByRole('button', { name: '移動', exact: true }).click();
   await expect(text).toBeInViewport();
   const handUrl = await centerOfTextRun(text, videoUrl);
+  const expectHoveredCursor = async (point: { x: number; y: number }, expected: string) => {
+    await page.mouse.move(point.x, point.y);
+    await expect
+      .poll(() =>
+        page.evaluate(
+          ({ x, y }) => getComputedStyle(document.elementFromPoint(x, y)!).cursor,
+          point,
+        ),
+      )
+      .toBe(expected);
+  };
+  await expectHoveredCursor(handUrl, 'pointer');
+  await expectHoveredCursor(await centerOfTextRun(text, prefix), 'grab');
   await page.mouse.click(handUrl.x, handUrl.y);
   await insert.click();
 
@@ -186,33 +199,39 @@ test('a printed YouTube URL on the neighboring sheet offers insertion onto that 
   await expect(video).toHaveCount(0);
 });
 
+async function openRotatedPdfLink(page: Page) {
+  const doc = await PDFDocument.create();
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  const handout = doc.addPage([520, 700]);
+  const label = 'Open lecture clip';
+  handout.drawText(label, { font, x: 100, y: 350, size: 21 });
+  handout.setRotation(degrees(90));
+  const rect: [number, number, number, number] = [
+    98,
+    345,
+    102 + font.widthOfTextAtSize(label, 21),
+    373,
+  ];
+  addPdfLink(handout, rect, videoUrl);
+  await openPdf(page, doc);
+  await page.getByLabel('ページ表示').selectOption('single');
+  const sheet = (await page.getByTestId('pdf-page').boundingBox())!;
+  // Rotating the sheet 90° maps PDF y to screen x and PDF x to screen y.
+  return {
+    x: sheet.x + (sheet.width * (rect[1] + rect[3])) / (2 * 700),
+    y: sheet.y + (sheet.height * (rect[0] + rect[2])) / (2 * 520),
+  };
+}
+
 test.describe('touch input', () => {
   test.use({ hasTouch: true, viewport: { width: 1024, height: 768 } });
 
   test('a tap on a YouTube hyperlink with a label offers insertion without external navigation', async ({
     page,
   }) => {
-    const doc = await PDFDocument.create();
-    const font = await doc.embedFont(StandardFonts.Helvetica);
-    const handout = doc.addPage([520, 700]);
-    const label = 'Open lecture clip';
-    handout.drawText(label, { font, x: 100, y: 350, size: 21 });
-    handout.setRotation(degrees(90));
-    const rect: [number, number, number, number] = [
-      98,
-      345,
-      102 + font.widthOfTextAtSize(label, 21),
-      373,
-    ];
-    addPdfLink(handout, rect, videoUrl);
-    await openPdf(page, doc);
-    await page.getByLabel('ページ表示').selectOption('single');
+    const { x, y } = await openRotatedPdfLink(page);
     await page.getByRole('button', { name: '移動', exact: true }).click();
     await expect(page.locator(indexedPdfText)).toBeAttached();
-    const sheet = (await page.getByTestId('pdf-page').boundingBox())!;
-    // Rotating the sheet 90° maps PDF y to screen x and PDF x to screen y.
-    const x = sheet.x + (sheet.width * (rect[1] + rect[3])) / (2 * 700);
-    const y = sheet.y + (sheet.height * (rect[0] + rect[2])) / (2 * 520);
     const startUrl = page.url();
     await page.touchscreen.tap(x, y);
     const insert = insertPdfVideo(page);
@@ -224,5 +243,60 @@ test.describe('touch input', () => {
     const video = page.getByTestId('video-box');
     await expect(video).toHaveCount(1);
     await expect(video.locator('img')).toHaveAttribute('src', /M7lc1UVf-VE/);
+  });
+
+  test('finger taps open a link in pen mode while a Pencil contact still writes', async ({
+    page,
+  }) => {
+    const position = await openRotatedPdfLink(page);
+    const pen = page.getByRole('button', { name: 'ペン', exact: true });
+    const undo = page.getByRole('button', { name: '元に戻す', exact: true });
+    const insert = insertPdfVideo(page);
+    await expect(pen).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator(indexedPdfText)).toBeAttached();
+    await page.touchscreen.tap(position.x, position.y);
+    await expect(insert).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(insert).toHaveCount(0);
+
+    const settings = page.getByLabel('入力設定', { exact: true });
+    await settings.click();
+    await page.getByRole('checkbox', { name: '指でも筆記する', exact: true }).check();
+    await settings.click();
+    await page.touchscreen.tap(position.x, position.y);
+    await expect(insert).toBeVisible();
+    await expect(undo).toBeDisabled();
+    const video = page.getByTestId('video-box');
+    await insert.tap();
+    await expect(insert).toHaveCount(0);
+    await expect(video.locator('img')).toHaveAttribute('src', /M7lc1UVf-VE/);
+    await undo.click();
+    await expect(video).toHaveCount(0);
+    await expect(undo).toBeDisabled();
+
+    await page.getByTestId('stage').evaluate((stage, { x, y }) => {
+      // The browser cannot capture a synthetic pointer ID.
+      stage.setPointerCapture = () => {};
+      const target = document.elementFromPoint(x, y)!;
+      for (const kind of ['pointerdown', 'pointerup', 'click']) {
+        target.dispatchEvent(
+          new PointerEvent(kind, {
+            bubbles: true,
+            cancelable: true,
+            pointerType: 'pen',
+            isPrimary: true,
+            pointerId: 7,
+            clientX: x,
+            clientY: y,
+            button: 0,
+            buttons: kind === 'pointerdown' ? 1 : 0,
+            pressure: kind === 'pointerdown' ? 0.65 : 0,
+          }),
+        );
+      }
+    }, position);
+    await expect(undo).toBeEnabled();
+    await expect(insert).toHaveCount(0);
+    await expect(video).toHaveCount(0);
   });
 });

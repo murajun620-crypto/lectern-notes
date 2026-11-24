@@ -1130,7 +1130,7 @@ h3 {
   transform-origin: 0 0;
   pointer-events: auto;
 }
-.tool-hand .pdf-text-layer {
+.pdf-text-layer[aria-hidden='true'] {
   -webkit-user-select: none;
   user-select: none;
 }
@@ -1288,6 +1288,9 @@ h3 {
 }
 .tool-hand {
   cursor: grab;
+}
+.tool-hand[data-pdf-link-hover] {
+  cursor: pointer;
 }
 .tool-hand:active {
   cursor: grabbing;
