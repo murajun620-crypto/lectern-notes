@@ -792,13 +792,21 @@ export default function App() {
       }
     });
   };
-  const addBlank = () => {
-    const newPage = blankPage(page?.width, page?.height);
-    update((p) => ({
-      ...p,
-      pages: [...p.pages.slice(0, p.currentPage + 1), newPage, ...p.pages.slice(p.currentPage + 1)],
-      currentPage: p.currentPage + 1,
-    }));
+  const addBlank = (side: 'before' | 'after') => {
+    if (!page) return;
+    const newPage = blankPage(page.width, page.height);
+    rememberView();
+    setRestoreLocation(null);
+    update((p) => {
+      const anchor = p.pages.findIndex((item) => item.id === page.id);
+      if (anchor < 0) return p;
+      const index = anchor + (side === 'after' ? 1 : 0);
+      return {
+        ...p,
+        pages: [...p.pages.slice(0, index), newPage, ...p.pages.slice(index)],
+        currentPage: index,
+      };
+    });
   };
   const movePage = (index: number, delta: number) =>
     update((p) => {
@@ -1477,6 +1485,19 @@ export default function App() {
             >
               <LayoutGrid size={21} />
             </IconButton>
+            <details className="page-view-menu">
+              <summary className="icon-button" title="白紙を挿入" aria-label="白紙を挿入">
+                <FilePlus2 size={21} />
+              </summary>
+              <div className="dropdown page-view-dropdown">
+                <button type="button" onClick={() => addBlank('before')}>
+                  <ArrowUp size={17} /> 前に挿入
+                </button>
+                <button type="button" onClick={() => addBlank('after')}>
+                  <ArrowDown size={17} /> 後ろに挿入
+                </button>
+              </div>
+            </details>
             {!preferences.showFooter && (
               <details className="page-view-menu">
                 <summary className="icon-button page-view-toggle">ページ・表示</summary>
@@ -1711,7 +1732,7 @@ export default function App() {
                     </div>
                   ))}
                 </div>
-                <button className="add-page" onClick={addBlank}>
+                <button className="add-page" onClick={() => addBlank('after')}>
                   <Plus size={17} /> 白紙を追加
                 </button>
               </aside>
@@ -2034,6 +2055,9 @@ export default function App() {
             <h3>説明していた場所に戻る</h3>
             <p>
               ページ一覧やページ番号で別のページへ飛ぶと、用紙の左下に「○ページに戻る」が出ます。タップすると、元の倍率で同じ箇所に戻れます。スクロールで移動するときは、先にページ番号の横の「ここを覚える」を押してください。
+            </p>
+            <p>
+              ツールバーの「白紙を挿入」で、表示しているページの前か後ろに同じサイズの白紙を追加できます。挿入した白紙にそのまま書き込めます。
             </p>
             <h3>動画で伝える</h3>
             <p>

@@ -3,6 +3,7 @@ import type { Page as BrowserPage } from '@playwright/test';
 import { PDFDocument, degrees } from 'pdf-lib';
 import JSZip from 'jszip';
 import { readFile } from 'node:fs/promises';
+import type { Project } from '../src/model';
 
 test('mixed page sizes preserve proportions and ink through zoom and screen rotation', async ({
   page,
@@ -218,6 +219,78 @@ test('page reorder, delete, blank page and append actual portrait/rotated PDF', 
     stage = (await page.getByTestId('stage').boundingBox())!;
   expect(Math.abs(paper.width - (stage.width - 56))).toBeLessThan(2);
   await page.getByRole('button', { name: 'フィット', exact: true }).click();
+});
+test('inserts writable blank pages before or after the displayed page and retains their sizes', async ({
+  page,
+}) => {
+  const doc = await PDFDocument.create();
+  doc.addPage([360, 640]).drawText('Portrait handout');
+  const rotated = doc.addPage([410, 720]);
+  rotated.drawText('Landscape handout');
+  rotated.setRotation(degrees(90));
+  await page.goto('/');
+  const chooser = page.waitForEvent('filechooser');
+  await page.getByRole('button', { name: 'PDFを読み込む', exact: true }).click();
+  await (
+    await chooser
+  ).setFiles({
+    name: 'blank-insertion.pdf',
+    mimeType: 'application/pdf',
+    buffer: Buffer.from(await doc.save()),
+  });
+
+  const thumbnail = (number: number) =>
+    page.getByRole('button', { name: `ページ ${number}`, exact: true });
+  const layout = page.getByLabel('ページ表示');
+  const insert = page.getByLabel('白紙を挿入', { exact: true });
+  await expect(thumbnail(2)).toBeVisible();
+  await saved(page);
+  const original: Project = (await stored(page))[0];
+  await expect(layout).toHaveValue('continuous');
+  await thumbnail(2).click();
+  await expect(thumbnail(2)).toHaveAttribute('aria-current', 'page');
+  await insert.click();
+  await page.getByRole('button', { name: '前に挿入', exact: true }).click();
+  await expect(thumbnail(2)).toHaveAttribute('aria-current', 'page');
+  await expect(thumbnail(3)).toBeVisible();
+  await saved(page);
+  const withLandscapeBlank: Project = (await stored(page))[0];
+  const landscapeBlank = withLandscapeBlank.pages[1];
+  expect(landscapeBlank).toMatchObject({ width: 720, height: 410, strokes: [], videos: [] });
+  expect(landscapeBlank.assetId).toBeUndefined();
+  expect(withLandscapeBlank.pages[2].id).toBe(original.pages[1].id);
+  await line(page);
+
+  await layout.selectOption('single');
+  await thumbnail(1).click();
+  await expect(thumbnail(1)).toHaveAttribute('aria-current', 'page');
+  await insert.click();
+  await page.getByRole('button', { name: '後ろに挿入', exact: true }).click();
+  await expect(thumbnail(2)).toHaveAttribute('aria-current', 'page');
+  await expect(thumbnail(4)).toBeVisible();
+  await saved(page);
+  const withPortraitBlank: Project = (await stored(page))[0];
+  const portraitBlank = withPortraitBlank.pages[1];
+  await page.reload();
+  await expect(thumbnail(2)).toHaveAttribute('aria-current', 'page');
+  const restored: Project = (await stored(page))[0];
+  expect(restored.pages.map((sheet) => sheet.id)).toEqual([
+    original.pages[0].id,
+    portraitBlank.id,
+    landscapeBlank.id,
+    original.pages[1].id,
+  ]);
+  expect(restored.pages[1]).toMatchObject({ width: 360, height: 640, strokes: [], videos: [] });
+  expect(restored.pages[1].assetId).toBeUndefined();
+  expect(restored.pages[2].strokes).toHaveLength(1);
+
+  await page.locator('.export-menu>summary').click();
+  const downloading = page.waitForEvent('download');
+  await page.getByRole('button', { name: '書き込み入りPDF', exact: true }).click();
+  const output = await PDFDocument.load(await readFile((await (await downloading).path())!));
+  expect(output.getPageCount()).toBe(4);
+  expect(output.getPage(1).getSize()).toEqual({ width: 360, height: 640 });
+  expect(output.getPage(2).getSize()).toEqual({ width: 720, height: 410 });
 });
 test('YouTube placement controls appear on selection and stay available in fullscreen', async ({
   page,
