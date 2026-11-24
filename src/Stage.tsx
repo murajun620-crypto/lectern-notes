@@ -25,6 +25,7 @@ import { useInkLayer } from './useInkLayer';
 import { usePdfDetail } from './usePdfDetail';
 import { usePageStack } from './usePageStack';
 import PageStackPreview from './PageStackPreview';
+import PDFTextLayer from './PDFTextLayer';
 import { applyErasure } from './eraser';
 import InkSelectionControls from './InkSelectionControls';
 import {
@@ -69,6 +70,10 @@ type PencilContact = {
 };
 const nativePencil = Symbol('native Pencil contact');
 type Pinch = { distance: number; zoom: number; mid: Position; anchor: Position };
+const clearPdfSelection = (stage: HTMLElement | null) => {
+  const selection = window.getSelection();
+  if (selection?.anchorNode && stage?.contains(selection.anchorNode)) selection.removeAllRanges();
+};
 const changeSelection = (strokes: Stroke[], ids: Set<string>, { scale, x, y }: InkTransform) =>
   strokes.map((stroke) => (ids.has(stroke.id) ? transformStroke(stroke, scale, x, y) : stroke));
 
@@ -151,6 +156,7 @@ export default function Stage({
     [pasteAnchor, setPasteAnchor] = useState<Position | null>(null);
   const [selectedVideo, setSelectedVideo] = useState<string | null>(null);
   const [playingVideo, setPlayingVideo] = useState<string | null>(null);
+  const selectingText = tool === 'text';
   const [videoControls, setVideoControls] = useState<HTMLDivElement | null>(null);
   const closePlayback = useCallback((key: string) => {
     setPlayingVideo((current) => (current === key ? null : current));
@@ -290,6 +296,9 @@ export default function Stage({
     captureLocation,
     view,
   ]);
+  useLayoutEffect(() => {
+    if (selectingText) paintStack(view.current);
+  }, [selectingText, paintStack, view]);
   const continuous = Boolean(stack.active);
   useEffect(() => {
     const stage = viewport.current!;
@@ -486,6 +495,11 @@ export default function Stage({
     setLasso([]);
     setPasteAnchor(null);
   }, [tool]);
+  useLayoutEffect(() => {
+    if (!selectingText) return;
+    const stage = viewport.current;
+    return () => clearPdfSelection(stage);
+  }, [selectingText, page.id]);
   useEffect(() => {
     const remember = (id: number) => {
       const ids = knownPencilIds.current;
@@ -1454,7 +1468,9 @@ export default function Stage({
       data-testid="stage"
       onPointerDownCapture={(e) => {
         const target = e.target as Element;
-        if (e.pointerType === 'pen') {
+        if (selectingText) {
+          if (stopCoast()) commitView(false);
+        } else if (e.pointerType === 'pen') {
           if (
             !writingWithPencil ||
             target.closest('.video-box,[data-video-control],[data-selection-control]')
@@ -1489,6 +1505,7 @@ export default function Stage({
           setSelectedVideo(null);
       }}
       onPointerMoveCapture={(e) => {
+        if (selectingText && !gesture.current) return;
         if (e.pointerType !== 'touch') return;
         const g = gesture.current;
         if (g?.pencil?.touchId === e.pointerId && !g.pencil.touchEnded) {
@@ -1503,6 +1520,11 @@ export default function Stage({
         }
       }}
       onPointerUpCapture={(e) => {
+        if (selectingText && !gesture.current) {
+          if (e.pointerType === 'pen') palm.current.penUp(e.pointerId, performance.now());
+          if (e.pointerType === 'touch') palm.current.touchUp(e.pointerId);
+          return;
+        }
         if (e.pointerType === 'pen') palm.current.penUp(e.pointerId, performance.now());
         if (e.pointerType === 'touch') {
           endTouchPointerForPencil(e.pointerId, e.timeStamp);
@@ -1522,6 +1544,7 @@ export default function Stage({
         }
       }}
       onClickCapture={(e) => {
+        if (selectingText) return;
         const pe = e.nativeEvent as PointerEvent;
         if (
           palm.current.blocksClick(
@@ -1537,6 +1560,7 @@ export default function Stage({
         }
       }}
       onPointerDown={(e) => {
+        if (selectingText) return;
         const capture = () => e.currentTarget.setPointerCapture(e.pointerId);
         if (e.pointerType === 'pen' && writingWithPencil) startPencil(e, 'pointer', capture);
         else {
@@ -1594,6 +1618,7 @@ export default function Stage({
         ) {
           swipe.current = null;
           if (!nativePinch.current || nativePinch.current.ending) {
+            if (selectingText) clearPdfSelection(e.currentTarget);
             hideEraser();
             beginView();
             const [a, b] = contacts;
@@ -1614,9 +1639,17 @@ export default function Stage({
           if (tap.current) tap.current.cancelled = true;
           return;
         }
+        const selection = selectingText ? window.getSelection() : null;
+        const nativeTextGesture =
+          selectingText &&
+          ((e.target as Element).closest('.pdf-text-layer span') ||
+            (selection &&
+              !selection.isCollapsed &&
+              e.currentTarget.contains(selection.anchorNode)));
         if (
           e.touches.length !== 1 ||
-          fingerInk ||
+          nativeTextGesture ||
+          (fingerInk && !selectingText) ||
           tool === 'laser' ||
           interactive ||
           gesture.current?.kind === 'move' ||
@@ -1805,7 +1838,9 @@ export default function Stage({
           clearInkGesture();
         }
       }}
-      onPointerMove={move}
+      onPointerMove={(e) => {
+        if (!selectingText || gesture.current) move(e);
+      }}
       onPointerLeave={hideEraser}
       onPointerUp={(e) => up(e)}
       onPointerCancel={(e) => up(e, true)}
@@ -1814,7 +1849,9 @@ export default function Stage({
         if (e.target === e.currentTarget && !(pencil?.touchId !== undefined && !pencil.touchEnded))
           up(e, true);
       }}
-      onContextMenu={(e) => e.preventDefault()}
+      onContextMenu={(e) => {
+        if (!selectingText) e.preventDefault();
+      }}
     >
       {stack.active && (
         <div ref={stack.paperLayer} className="stack-board" aria-hidden="true">
@@ -1869,11 +1906,32 @@ export default function Stage({
         }}
       >
         <canvas ref={inkPreview} className="ink-page-preview" aria-hidden="true" />
+        {!stack.active && selectingText && <PDFTextLayer key={page.id} page={page} scale={fit} />}
         {!stack.active && renderVideos(page, fit)}
         {loading && (!stack.active || !pdfCanvas.current?.dataset.page) && (
           <div className="pdf-loading">ページを読み込み中…</div>
         )}
       </div>
+      {stack.active && selectingText && (
+        <div ref={stack.textLayer} className="stack-board stack-text-board">
+          {stack.nearby.map((item) => (
+            <div
+              key={item.page.id}
+              className="stack-text-page"
+              data-page-id={item.page.id}
+              data-current={item.page.id === page.id}
+              style={{
+                left: (-item.page.width * item.fit) / 2,
+                top: item.top - stack.active!.center,
+                width: item.page.width * item.fit,
+                height: item.page.height * item.fit,
+              }}
+            >
+              <PDFTextLayer page={item.page} scale={item.fit} />
+            </div>
+          ))}
+        </div>
+      )}
       {stack.active && (
         <div ref={stack.videoLayer} className="stack-board stack-video-board">
           {stack.nearby
@@ -1919,17 +1977,19 @@ export default function Stage({
       <div className="stage-note">
         {tool === 'laser'
           ? '触れて動かすとレーザーを表示'
-          : tool === 'select'
-            ? inkClipboard.length
-              ? '空白をタップして貼り付け先を指定'
-              : '線を囲むかタップして選択'
-            : zoom > 1
-              ? '2本指で移動・ピンチで拡大縮小'
-              : fingerInk
-                ? '指でも筆記できます · 2本指で拡大縮小'
-                : stack.active
-                  ? 'Pencilで筆記 · 指で上下にスクロール'
-                  : 'Pencilで筆記 · 指でページ送り · 2本指で拡大縮小'}
+          : selectingText
+            ? '文字をドラッグ、または長押ししてコピー'
+            : tool === 'select'
+              ? inkClipboard.length
+                ? '空白をタップして貼り付け先を指定'
+                : '線を囲むかタップして選択'
+              : zoom > 1
+                ? '2本指で移動・ピンチで拡大縮小'
+                : fingerInk
+                  ? '指でも筆記できます · 2本指で拡大縮小'
+                  : stack.active
+                    ? 'Pencilで筆記 · 指で上下にスクロール'
+                    : 'Pencilで筆記 · 指でページ送り · 2本指で拡大縮小'}
       </div>
     </div>
   );

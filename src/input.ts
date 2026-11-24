@@ -21,7 +21,7 @@ export function createInkPriority() {
 }
 export type InkPriority = ReturnType<typeof createInkPriority>;
 
-export type PencilTool = Exclude<Tool, 'hand'>;
+export type PencilTool = Exclude<Tool, 'hand' | 'text'>;
 export const penWidths = [1, 2.5, 4, 7, 10];
 export const highlighterWidths = [5, 12.5, 20, 35, 50];
 export const toolWidthRanges = {

@@ -34,6 +34,7 @@ import {
   Settings2,
   Sparkles,
   Tags,
+  TextCursorInput,
   Trash2,
   Undo2,
   Upload,
@@ -216,12 +217,19 @@ const Thumbnail = memo(function Thumbnail({
   }, [background, scale, strokes, shouldPause]);
   return <canvas ref={ref} style={{ aspectRatio: `${page.width}/${page.height}` }} />;
 });
-const tools: { id: Tool; label: string; icon: ReactNode; key: string }[] = [
+const tools: { id: Tool; label: string; caption?: string; icon: ReactNode; key: string }[] = [
   { id: 'hand', label: '移動', icon: <Hand />, key: 'H' },
   { id: 'pen', label: 'ペン', icon: <PenLine />, key: 'P' },
   { id: 'highlighter', label: '蛍光ペン', icon: <Highlighter />, key: 'M' },
   { id: 'eraser', label: '消しゴム', icon: <Eraser />, key: 'E' },
   { id: 'select', label: '選択', icon: <MousePointer2 />, key: 'S' },
+  {
+    id: 'text',
+    label: 'PDFテキストを選択',
+    caption: '本文選択',
+    icon: <TextCursorInput />,
+    key: 'T',
+  },
   { id: 'laser', label: 'レーザー', icon: <Sparkles />, key: 'L' },
 ];
 const penKindLabels: Record<PenKind, string> = {
@@ -301,7 +309,7 @@ export default function App() {
   const fingerInk = preferences.fingerInk;
   const pencilTool = useRef<PencilTool>('pen'),
     lastWritingTool = useRef<WritingTool>('pen');
-  if (tool !== 'hand') pencilTool.current = tool;
+  if (tool !== 'hand' && tool !== 'text') pencilTool.current = tool;
   if (tool === 'pen' || tool === 'highlighter') lastWritingTool.current = tool;
   const writingTool = lastWritingTool.current;
   const palette = inkPalettes[writingTool];
@@ -311,7 +319,7 @@ export default function App() {
   const color = typeof colorChoice === 'number' ? presets[colorChoice] : colorChoice;
   const chooseColor = (choice: number | string) =>
     setColorChoices((current) => ({ ...current, [writingTool]: choice }));
-  const widthTool = tool === 'hand' ? pencilTool.current : tool;
+  const widthTool = tool === 'hand' || tool === 'text' ? pencilTool.current : tool;
   const widthPreference =
     widthTool === 'laser'
       ? 'laserWidth'
@@ -1320,7 +1328,7 @@ export default function App() {
                   onClick={() => setTool(t.id)}
                 >
                   {t.icon}
-                  <span>{t.label}</span>
+                  <span>{t.caption ?? t.label}</span>
                 </button>
               ))}
             </div>
@@ -1798,14 +1806,17 @@ export default function App() {
           {preferences.showFooter && (
             <footer className="editor-footer" data-ink-controls="">
               <span className="footer-tool">
-                <span className="live-dot" /> {tools.find((t) => t.id === tool)?.label}ツール
+                <span className="live-dot" />{' '}
+                {tool === 'text' ? '本文選択' : `${tools.find((t) => t.id === tool)?.label}ツール`}
                 {!fullscreen && (
                   <span className="footer-hint">
-                    {tool === 'hand'
-                      ? '動画のサムネイルをタップして配置を編集'
-                      : preferences.pageMode === 'continuous'
-                        ? 'Pencilで書く、指で上下にスクロール'
-                        : 'Pencilで書く、指でめくる'}
+                    {tool === 'text'
+                      ? 'ドラッグまたは長押しで文字を選択'
+                      : tool === 'hand'
+                        ? '動画のサムネイルをタップして配置を編集'
+                        : preferences.pageMode === 'continuous'
+                          ? 'Pencilで書く、指で上下にスクロール'
+                          : 'Pencilで書く、指でめくる'}
                   </span>
                 )}
               </span>
@@ -2021,6 +2032,10 @@ export default function App() {
               ページ一覧やページ番号で別のページへ飛ぶと、用紙の左下に「○ページに戻る」が出ます。タップすると、元の倍率で同じ箇所に戻れます。スクロールで移動するときは、先にページ番号の横の「ここを覚える」を押してください。
             </p>
             <h3>動画で伝える</h3>
+            <p>
+              PDFに書かれたURLは、ツールバーの「本文選択」でドラッグまたは長押ししてコピーできます。「動画を挿入」のYouTube
+              URL欄に貼り付けてください。
+            </p>
             <p>
               中央の ▶
               をタップすると、YouTube動画を同じページで再生します。サムネイルのほかの部分をタップすると配置メニューが開きます。再生中は「閉じる」でサムネイルに戻り、動画の外のページを指でタップすると配置メニューも開きます。Safariが再生を止めた場合は、動画内の再生ボタンをタップしてください。埋め込み禁止やネットワークエラー時には代替リンクを表示します。

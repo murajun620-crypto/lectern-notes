@@ -55,6 +55,7 @@ export function usePageStack(
   }
 
   const paperLayer = useRef<HTMLDivElement>(null);
+  const textLayer = useRef<HTMLDivElement>(null);
   const videoLayer = useRef<HTMLDivElement>(null);
   const carried = useRef<{ id: string; pan: PageView['pan'] } | null>(null);
   const [range, setRange] = useState<[number, number]>([0, 1]);
@@ -84,6 +85,7 @@ export function usePageStack(
       if (activeCenter === undefined) return;
       const transform = `translate3d(${view.pan.x}px, ${view.pan.y}px, 0) scale(${view.zoom})`;
       if (paperLayer.current) paperLayer.current.style.transform = transform;
+      if (textLayer.current) textLayer.current.style.transform = transform;
       if (videoLayer.current) videoLayer.current.style.transform = transform;
 
       const stack = currentStack.current;
@@ -142,6 +144,7 @@ export function usePageStack(
     captureLocation,
     contentBounds,
     paperLayer,
+    textLayer,
     videoLayer,
     focus,
     paintStack,

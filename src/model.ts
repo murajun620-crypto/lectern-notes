@@ -1,5 +1,5 @@
 import { getStrokeOutlinePoints, getStrokePoints } from 'perfect-freehand';
-export type Tool = 'pen' | 'highlighter' | 'eraser' | 'select' | 'laser' | 'hand';
+export type Tool = 'pen' | 'highlighter' | 'eraser' | 'select' | 'text' | 'laser' | 'hand';
 export const penKinds = ['ballpoint', 'fountain', 'pencil', 'brush'] as const;
 export type PenKind = (typeof penKinds)[number];
 export const isPenKind = (value: unknown): value is PenKind =>
