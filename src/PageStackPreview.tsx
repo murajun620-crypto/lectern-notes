@@ -19,7 +19,7 @@ export default memo(function PageStackPreview({
 }) {
   const pdf = useRef<HTMLCanvasElement>(null);
   const ink = useRef<HTMLCanvasElement>(null);
-  const { id, width, height, sourcePage, assetId, strokes } = page;
+  const { id, width, height, sourcePage, assetId, paper, strokes } = page;
   const scale = Math.min(fit * (devicePixelRatio || 1), 1200 / Math.max(width, height));
   useEffect(() => {
     if (active) return;
@@ -27,7 +27,7 @@ export default memo(function PageStackPreview({
     const temp = document.createElement('canvas');
     const abort = new AbortController();
     void renderPage(
-      { width, height, sourcePage, assetId },
+      { width, height, sourcePage, assetId, paper },
       temp,
       scale,
       abort.signal,
@@ -47,7 +47,7 @@ export default memo(function PageStackPreview({
         temp.width = temp.height = 1;
       });
     return () => abort.abort();
-  }, [id, width, height, sourcePage, assetId, scale, active, shouldPausePdf]);
+  }, [id, width, height, sourcePage, assetId, paper, scale, active, shouldPausePdf]);
 
   useEffect(() => {
     const canvas = ink.current!;

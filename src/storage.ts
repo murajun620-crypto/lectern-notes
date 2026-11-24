@@ -221,6 +221,8 @@ export function validateProject(p: unknown): asserts p is Project {
       ids.has(pg.id) ||
       !finite(pg.width, 1, 20000) ||
       !finite(pg.height, 1, 20000) ||
+      (pg.paper !== undefined &&
+        (pg.assetId !== undefined || (pg.paper !== 'lined' && pg.paper !== 'grid'))) ||
       !Array.isArray(pg.strokes) ||
       !Array.isArray(pg.videos) ||
       pg.strokes.length > 100000 ||

@@ -117,7 +117,7 @@ export function usePdfDetail({
     timer?: ReturnType<typeof setTimeout>;
     request?: AbortController;
   }>({});
-  const { id, assetId, sourcePage, width, height } = page;
+  const { id, assetId, sourcePage, width, height, paper } = page;
   const clearLive = useCallback(() => {
     clearTimeout(live.current.timer);
     live.current.request?.abort();
@@ -130,8 +130,8 @@ export function usePdfDetail({
       shouldPause: () => boolean,
       canPublish: () => boolean,
     ) => {
-      if (!assetId) return;
-      const source = { id, assetId, sourcePage, width, height };
+      if (!assetId && !paper) return;
+      const source = { id, assetId, sourcePage, width, height, paper };
       const plan = detailPlan(source, fit, size, sample, baseScale, cache.current.get(id));
       if (!plan) return;
       const { box, canvasWidth, canvasHeight, density, displayScale, scale, originX, originY } =
@@ -184,7 +184,7 @@ export function usePdfDetail({
         if (!published) canvas.width = canvas.height = 1;
       }
     },
-    [id, assetId, sourcePage, width, height, fit, size, baseScale, view, showDetail],
+    [id, assetId, sourcePage, width, height, paper, fit, size, baseScale, view, showDetail],
   );
 
   useEffect(() => {
@@ -208,7 +208,7 @@ export function usePdfDetail({
 
   const observeZoom = (target: PageView) => {
     const state = live.current;
-    if (!assetId || !interacting.current || target.zoom < zoom * 1.4) {
+    if ((!assetId && !paper) || !interacting.current || target.zoom < zoom * 1.4) {
       if (state.target) clearLive();
       return;
     }

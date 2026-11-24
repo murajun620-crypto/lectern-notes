@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import type { Page as BrowserPage } from '@playwright/test';
 import { PDFDocument, degrees } from 'pdf-lib';
+import { getDocument, OPS } from 'pdfjs-dist/legacy/build/pdf.mjs';
 import JSZip from 'jszip';
 import { readFile } from 'node:fs/promises';
 import type { Project } from '../src/model';
@@ -242,7 +243,7 @@ test('inserts writable blank pages before or after the displayed page and retain
   const thumbnail = (number: number) =>
     page.getByRole('button', { name: `ページ ${number}`, exact: true });
   const layout = page.getByLabel('ページ表示');
-  const insert = page.getByLabel('白紙を挿入', { exact: true });
+  const insert = page.getByLabel('ページを挿入', { exact: true });
   await expect(thumbnail(2)).toBeVisible();
   await saved(page);
   const original: Project = (await stored(page))[0];
@@ -282,6 +283,7 @@ test('inserts writable blank pages before or after the displayed page and retain
   ]);
   expect(restored.pages[1]).toMatchObject({ width: 360, height: 640, strokes: [], videos: [] });
   expect(restored.pages[1].assetId).toBeUndefined();
+  expect(restored.pages[1].paper).toBeUndefined();
   expect(restored.pages[2].strokes).toHaveLength(1);
 
   await page.locator('.export-menu>summary').click();
@@ -291,6 +293,74 @@ test('inserts writable blank pages before or after the displayed page and retain
   expect(output.getPageCount()).toBe(4);
   expect(output.getPage(1).getSize()).toEqual({ width: 360, height: 640 });
   expect(output.getPage(2).getSize()).toEqual({ width: 720, height: 410 });
+});
+test('lined and grid paper survive reload and export as vector rules', async ({ page }) => {
+  await demo(page);
+  const insert = page.getByLabel('ページを挿入', { exact: true });
+  const after = page.getByRole('button', { name: '後ろに挿入', exact: true });
+  await insert.click();
+  await expect(page.getByRole('radio', { name: '無地', exact: true })).toBeChecked();
+  await page.getByRole('radio', { name: '横罫', exact: true }).check();
+  await after.click();
+  await expect(page.getByLabel('ページ番号')).toHaveValue('2');
+  await insert.click();
+  await page.getByRole('radio', { name: '方眼', exact: true }).check();
+  await after.click();
+  await expect(page.getByLabel('ページ番号')).toHaveValue('3');
+  await page.getByLabel('ページ表示').selectOption('single');
+  await saved(page);
+  const beforeReload: Project = (await stored(page))[0];
+  expect(beforeReload.currentPage).toBe(2);
+
+  await page.reload();
+  await expect(page.getByLabel('ページ番号')).toHaveValue('3');
+  const restored: Project = (await stored(page))[0];
+  expect(restored.pages.map((sheet) => sheet.paper)).toEqual([
+    undefined,
+    'lined',
+    'grid',
+    undefined,
+    undefined,
+  ]);
+  for (const number of [2, 3]) {
+    await page.getByRole('button', { name: `ページ ${number}`, exact: true }).click();
+    const sheet = restored.pages[number - 1];
+    const canvas = page.locator(`.pdf-canvas[data-page="${sheet.id}"]`);
+    await expect(canvas).toBeVisible();
+    const guides = await canvas.evaluate((surface: HTMLCanvasElement) => {
+      const { width, height } = surface;
+      const context = surface.getContext('2d')!;
+      const hasGuide = (pixels: ImageData) =>
+        pixels.data.some((value, index, data) => index % 4 === 0 && value < 245 && data[index + 3]);
+      return {
+        horizontal: hasGuide(context.getImageData(Math.round(width / 2), 0, 1, height)),
+        // A single row could coincide with a horizontal rule. Check several rows.
+        vertical: [0.45, 0.5, 0.55].every((y) =>
+          hasGuide(context.getImageData(0, Math.round(y * height), width, 1)),
+        ),
+      };
+    });
+    expect(guides).toEqual({ horizontal: true, vertical: sheet.paper === 'grid' });
+  }
+
+  await page.locator('.export-menu>summary').click();
+  const downloading = page.waitForEvent('download');
+  await page.getByRole('button', { name: '書き込み入りPDF', exact: true }).click();
+  const bytes = await readFile((await (await downloading).path())!);
+  const output = await getDocument({ data: Uint8Array.from(bytes) }).promise;
+  try {
+    expect(output.numPages).toBe(5);
+    for (const number of [2, 3]) {
+      const sheet = await output.getPage(number);
+      const { fnArray } = await sheet.getOperatorList();
+      expect(fnArray).toContain(OPS.constructPath);
+      expect(fnArray).toContain(OPS.stroke);
+      expect(fnArray).not.toContain(OPS.paintImageXObject);
+      expect(fnArray).not.toContain(OPS.paintInlineImageXObject);
+    }
+  } finally {
+    await output.destroy();
+  }
 });
 test('YouTube placement controls appear on selection and stay available in fullscreen', async ({
   page,

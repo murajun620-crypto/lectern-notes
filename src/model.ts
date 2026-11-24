@@ -25,10 +25,12 @@ export type Video = {
   height: number;
   collapsed?: boolean;
 };
+export type PaperPattern = 'lined' | 'grid';
 export type Page = {
   id: string;
   assetId?: string;
   sourcePage?: number;
+  paper?: PaperPattern;
   width: number;
   height: number;
   strokes: Stroke[];
@@ -46,10 +48,11 @@ export type Project = {
 };
 export const uid = () => crypto.randomUUID();
 export const A4 = { width: 595.28, height: 841.89 };
-export const blankPage = (width = A4.width, height = A4.height): Page => ({
+export const blankPage = (width = A4.width, height = A4.height, paper?: PaperPattern): Page => ({
   id: uid(),
   width,
   height,
+  ...(paper && { paper }),
   strokes: [],
   videos: [],
 });

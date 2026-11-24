@@ -625,6 +625,7 @@ export default function Stage({
     page.id,
     page.assetId,
     page.sourcePage,
+    page.paper,
     page.width,
     page.height,
     rasterScale,

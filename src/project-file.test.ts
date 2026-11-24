@@ -46,6 +46,17 @@ describe('editable Lectern project files', () => {
     expect(prepared.assets.size).toBe(0);
   });
 
+  it('preserves inserted paper patterns when a project file is opened on a new device', async () => {
+    const sheets = [blankPage(720, 410, 'lined'), blankPage(360, 640, 'grid')];
+    project.pages.push(...sheets);
+    const blob = await exportProjectFile(project);
+    projects.clear();
+    assets.clear();
+
+    const prepared = await prepareProjectFile(new File([blob], '資料.lectern'));
+    expect(prepared.project.pages.slice(-2)).toEqual(sheets);
+  });
+
   it('compares the actual PDF even if the embedded source ID matches a local PDF', async () => {
     const file = await exportProjectFile(project);
     const zip = await JSZip.loadAsync(await file.slice(header.length).arrayBuffer());

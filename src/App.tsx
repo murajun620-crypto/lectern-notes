@@ -45,7 +45,7 @@ import {
   ArrowUpRight,
   CircleAlert,
 } from 'lucide-react';
-import type { Page, PenKind, Project, Stroke, Tool } from './model';
+import type { Page, PaperPattern, PenKind, Project, Stroke, Tool } from './model';
 import {
   blankPage,
   clamp,
@@ -158,7 +158,7 @@ const Thumbnail = memo(function Thumbnail({
 }) {
   const ref = useRef<HTMLCanvasElement>(null);
   const [background, setBackground] = useState<HTMLCanvasElement | null>(null);
-  const { width, height, sourcePage, assetId, strokes } = page;
+  const { width, height, sourcePage, assetId, paper, strokes } = page;
   const scale = 160 / width;
   useEffect(() => {
     const abort = new AbortController();
@@ -169,7 +169,7 @@ const Thumbnail = memo(function Thumbnail({
       observer.disconnect();
       const temp = document.createElement('canvas');
       void renderPage(
-        { width, height, sourcePage, assetId },
+        { width, height, sourcePage, assetId, paper },
         temp,
         scale,
         abort.signal,
@@ -186,7 +186,7 @@ const Thumbnail = memo(function Thumbnail({
       abort.abort();
       observer.disconnect();
     };
-  }, [width, height, sourcePage, assetId, scale, shouldPause]);
+  }, [width, height, sourcePage, assetId, paper, scale, shouldPause]);
   useEffect(() => {
     const canvas = ref.current!;
     if (!background) return;
@@ -238,6 +238,11 @@ const penKindLabels: Record<PenKind, string> = {
   pencil: '鉛筆',
   brush: '筆ペン',
 };
+const paperOptions: { pattern?: PaperPattern; label: string }[] = [
+  { label: '無地' },
+  { pattern: 'lined', label: '横罫' },
+  { pattern: 'grid', label: '方眼' },
+];
 const inkPalettes = {
   pen: { label: 'ペン', preference: 'presets', widthPreference: 'penWidth', widths: penWidths },
   highlighter: {
@@ -288,6 +293,7 @@ export default function App() {
     [trail, setTrail] = useState(true),
     [zoom, setZoom] = useState(1),
     [fitWidth, setFitWidth] = useState(false),
+    [insertPaper, setInsertPaper] = useState<PaperPattern>(),
     [sidebar, setSidebar] = useState(true),
     [fullscreenSidebar, setFullscreenSidebar] = useState(false),
     [documentTools, setDocumentTools] = useState(false);
@@ -792,9 +798,9 @@ export default function App() {
       }
     });
   };
-  const addBlank = (side: 'before' | 'after') => {
+  const insertPage = (side: 'before' | 'after', pattern?: PaperPattern) => {
     if (!page) return;
-    const newPage = blankPage(page.width, page.height);
+    const newPage = blankPage(page.width, page.height, pattern);
     rememberView();
     setRestoreLocation(null);
     update((p) => {
@@ -1485,15 +1491,37 @@ export default function App() {
             >
               <LayoutGrid size={21} />
             </IconButton>
-            <details className="blank-page-menu">
-              <summary className="icon-button" title="白紙を挿入" aria-label="白紙を挿入">
+            <details className="insert-page-menu">
+              <summary className="icon-button" title="ページを挿入" aria-label="ページを挿入">
                 <FilePlus2 size={21} />
               </summary>
-              <div className="dropdown blank-page-dropdown">
-                <button type="button" onClick={() => addBlank('before')}>
+              <div className="dropdown insert-page-dropdown">
+                <fieldset className="paper-options">
+                  <legend>用紙</legend>
+                  <div className="paper-option-list">
+                    {paperOptions.map(({ pattern, label }) => (
+                      <label
+                        className="paper-option"
+                        key={label}
+                        data-paper={pattern ?? 'plain'}
+                        data-selected={insertPaper === pattern}
+                      >
+                        <input
+                          type="radio"
+                          name="insert-paper"
+                          checked={insertPaper === pattern}
+                          onChange={() => setInsertPaper(pattern)}
+                        />
+                        <span className="paper-option-preview" aria-hidden="true" />
+                        {label}
+                      </label>
+                    ))}
+                  </div>
+                </fieldset>
+                <button type="button" onClick={() => insertPage('before', insertPaper)}>
                   <ArrowUp size={17} /> 前に挿入
                 </button>
-                <button type="button" onClick={() => addBlank('after')}>
+                <button type="button" onClick={() => insertPage('after', insertPaper)}>
                   <ArrowDown size={17} /> 後ろに挿入
                 </button>
               </div>
@@ -1732,7 +1760,7 @@ export default function App() {
                     </div>
                   ))}
                 </div>
-                <button className="add-page" onClick={() => addBlank('after')}>
+                <button className="add-page" onClick={() => insertPage('after')}>
                   <Plus size={17} /> 白紙を追加
                 </button>
               </aside>
@@ -2057,7 +2085,7 @@ export default function App() {
               ページ一覧やページ番号で別のページへ飛ぶと、用紙の左下に「○ページに戻る」が出ます。タップすると、元の倍率で同じ箇所に戻れます。スクロールで移動するときは、先にページ番号の横の「ここを覚える」を押してください。
             </p>
             <p>
-              ツールバーの「白紙を挿入」で、表示しているページの前か後ろに同じサイズの白紙を追加できます。挿入した白紙にそのまま書き込めます。
+              ツールバーの「ページを挿入」で、無地・横罫・方眼から用紙を選べます。表示しているページの前か後ろに、同じ大きさ・向きで挿入します。
             </p>
             <h3>動画で伝える</h3>
             <p>

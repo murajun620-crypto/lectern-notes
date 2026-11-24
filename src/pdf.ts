@@ -6,6 +6,7 @@ import { uid } from './model';
 import type { Page, Project } from './model';
 import { addPdfLink, drawPdfBackground, readVectorSource } from './pdf-background';
 import { drawPdfInk } from './pdf-ink';
+import { drawPaperPattern, drawPdfPaperPattern } from './paper-pattern';
 pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
 const documents = new Map<string, Promise<pdfjs.PDFDocumentProxy>>();
 export async function getPdf(id: string) {
@@ -66,7 +67,7 @@ export async function importPdf(file: File) {
   }
 }
 export async function renderPage(
-  page: Pick<Page, 'assetId' | 'sourcePage' | 'width' | 'height'>,
+  page: Pick<Page, 'assetId' | 'sourcePage' | 'width' | 'height' | 'paper'>,
   canvas: HTMLCanvasElement,
   scale: number,
   signal?: AbortSignal,
@@ -105,6 +106,11 @@ export async function renderPage(
       clearTimeout(timer);
       signal?.removeEventListener('abort', cancel);
     }
+  } else if (page.paper) {
+    ctx.save();
+    ctx.setTransform(scale, 0, 0, scale, region?.offsetX ?? 0, region?.offsetY ?? 0);
+    drawPaperPattern(ctx, page);
+    ctx.restore();
   }
 }
 export async function exportPdf(project: Project, progress: (s: string) => void) {
@@ -124,7 +130,7 @@ export async function exportPdf(project: Project, progress: (s: string) => void)
       const original = await (await getPdf(pg.assetId)).getPage(pg.sourcePage!);
       await drawPdfBackground(out, original, sources.get(pg.assetId)!);
       if (lastPage.get(pg.assetId) === i) sources.delete(pg.assetId);
-    }
+    } else if (pg.paper) drawPdfPaperPattern(out, pg);
     drawPdfInk(out, pg.strokes);
     // Export a clickable link placeholder for videos; editable geometry lives in the backup.
     if (pg.videos.length) {
