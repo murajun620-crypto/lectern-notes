@@ -859,14 +859,15 @@ h3 {
   font-size: 12px;
 }
 .ink-width-control {
+  --ink-width-column: 76px;
   display: grid;
-  grid-template-columns: 50px 76px;
+  grid-template-columns: 50px var(--ink-width-column);
   grid-template-rows: 26px 26px;
   align-items: center;
   column-gap: 4px;
 }
 .ink-width-control[data-ink-tool='pen'] {
-  grid-template-columns: 24px 76px;
+  grid-template-columns: 24px var(--ink-width-column);
 }
 .nib-preview {
   grid-row: 1 / span 2;
@@ -2404,6 +2405,40 @@ body,
 .is-fullscreen .tool-button {
   min-width: 44px;
   height: 48px;
+}
+@media (min-width: 1000px) and (max-width: 1250px) and (orientation: landscape) {
+  .toolbar,
+  .is-fullscreen .toolbar {
+    column-gap: 2px;
+    padding-inline: 8px;
+  }
+  .toolbar-divider {
+    display: none;
+  }
+  .toolbar .tool-group {
+    gap: 1px;
+  }
+  .toolbar .tool-group .tool-button {
+    min-width: 47px;
+  }
+  .is-fullscreen .toolbar .tool-group .tool-button {
+    min-width: 44px;
+  }
+  .toolbar .video-insert {
+    min-width: 56px;
+  }
+}
+@media (min-width: 1000px) and (max-width: 1050px) and (orientation: landscape) {
+  .is-fullscreen .toolbar {
+    column-gap: 1px;
+    padding-inline: 4px;
+  }
+  .is-fullscreen .toolbar .tool-group {
+    gap: 0;
+  }
+  .is-fullscreen .ink-width-control {
+    --ink-width-column: 60px;
+  }
 }
 .toolbar-video-actions {
   display: flex;

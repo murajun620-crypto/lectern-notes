@@ -155,6 +155,7 @@ test('a full-screen page mark stays available after hiding the footer', async ({
   await page.getByLabel('入力設定', { exact: true }).click();
   await expect(page.locator('.editor-footer')).toBeHidden();
   await expect(remember(page)).toHaveCount(0);
+  expect((await page.locator('.toolbar').boundingBox())!.height).toBeLessThan(72);
   await page.locator('.edge-nav.next').click();
   await back(page).click();
   await expect(page.locator('.edge-nav.prev')).toBeDisabled();
