@@ -146,17 +146,15 @@ test('return follows the reordered sheet, drops deleted sheets and clears when r
   await expect(back(page)).toBeHidden();
 });
 
-test('a lecturer can mark a page and go back with fullscreen on and the footer hidden', async ({
-  page,
-}) => {
+test('a full-screen page mark stays available after hiding the footer', async ({ page }) => {
   await page.setViewportSize({ width: 1024, height: 768 });
   await page.getByRole('button', { name: '全画面表示', exact: true }).click();
+  await remember(page).click();
   await page.getByLabel('入力設定', { exact: true }).click();
   await page.getByLabel('下部バーを表示').uncheck();
   await page.getByLabel('入力設定', { exact: true }).click();
   await expect(page.locator('.editor-footer')).toBeHidden();
-  await page.getByText('ページ・表示', { exact: true }).click();
-  await remember(page).click();
+  await expect(remember(page)).toHaveCount(0);
   await page.locator('.edge-nav.next').click();
   await back(page).click();
   await expect(page.locator('.edge-nav.prev')).toBeDisabled();

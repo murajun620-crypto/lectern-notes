@@ -1526,12 +1526,6 @@ export default function App() {
                 </button>
               </div>
             </details>
-            {!preferences.showFooter && (
-              <details className="page-view-menu">
-                <summary className="icon-button page-view-toggle">ページ・表示</summary>
-                <div className="page-view-dropdown">{pageAndViewControls}</div>
-              </details>
-            )}
             <details className="settings-menu">
               <summary className="icon-button" title="入力設定" aria-label="入力設定">
                 <Settings2 size={20} />
@@ -1599,9 +1593,6 @@ export default function App() {
                   />{' '}
                   下部バーを表示
                 </label>
-                <small>
-                  オフにすると、ページ送りと表示倍率は上部の「ページ・表示」から操作できます。
-                </small>
                 <button
                   type="button"
                   className="text-button"

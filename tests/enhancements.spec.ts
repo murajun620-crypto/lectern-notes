@@ -1602,7 +1602,7 @@ test('hiding the footer lets the PDF fill the iPad bottom safe area', async ({ p
   expect(await bottomGap(stage)).toBeCloseTo(0);
   await expect.poll(() => bottomGap(page.getByTestId('pdf-page'))).toBeCloseTo(0, 0);
   expect(await bottomGap(addBlank)).toBeGreaterThanOrEqual(inset);
-  await expect(page.getByText('ページ・表示', { exact: true })).toBeVisible();
+  await expect(page.getByText('ページ・表示', { exact: true })).toHaveCount(0);
 
   await settings.click();
   await showFooter.check();

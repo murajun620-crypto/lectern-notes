@@ -96,34 +96,47 @@ test('protects both bars from active and delayed palm taps while allowing a fres
   await expect(page.getByLabel('ページ番号')).toHaveValue('2');
 });
 
-test('hiding the lower bar keeps page and zoom controls in a stationary top menu', async ({
-  page,
-}) => {
+test('hiding the lower bar removes its controls until the bar is restored', async ({ page }) => {
   await demo(page);
   const stage = page.getByTestId('stage');
   const footer = page.locator('.editor-footer');
+  const toolbar = page.locator('.toolbar');
   const settings = page.getByLabel('入力設定', { exact: true });
   const menu = page.getByText('ページ・表示', { exact: true });
+  const pageNumber = page.getByLabel('ページ番号', { exact: true });
+  const zoom = page.getByLabel('表示倍率', { exact: true });
+  const pageTwo = page.getByRole('button', { name: 'ページ 2', exact: true });
+  const showFooter = page.getByRole('checkbox', { name: '下部バーを表示', exact: true });
   const initial = (await stage.boundingBox())!;
+  const toolbarHeight = (await toolbar.boundingBox())!.height;
+  await expect(pageNumber).toHaveValue('1');
+  await expect(zoom).toBeVisible();
   await settings.tap();
-  await page.getByRole('checkbox', { name: '下部バーを表示', exact: true }).uncheck();
+  await showFooter.uncheck();
+  await settings.tap();
   await expect(footer).toHaveCount(0);
+  await expect(menu).toHaveCount(0);
+  await expect(pageNumber).toHaveCount(0);
+  await expect(zoom).toHaveCount(0);
   const larger = (await stage.boundingBox())!;
   expect(larger.height).toBeGreaterThan(initial.height);
-  await menu.tap();
-  const topPanel = page.locator('.page-view-dropdown');
-  await expect(topPanel).toBeVisible();
-  expect(await stage.boundingBox()).toEqual(larger);
-  await topPanel.getByLabel('表示倍率').selectOption('2');
-  await topPanel.getByRole('button', { name: '次のページ', exact: true }).tap();
-  await expect(topPanel.getByLabel('ページ番号')).toHaveValue('2');
+  expect((await toolbar.boundingBox())!.height).toBe(toolbarHeight);
+  await pageTwo.tap();
+  await expect(pageTwo).toHaveAttribute('aria-current', 'page');
   expect(await stage.boundingBox()).toEqual(larger);
   await expect(page.getByText('保存済み', { exact: true })).toBeVisible();
   await page.reload();
+  await expect(pageTwo).toHaveAttribute('aria-current', 'page');
   await expect(footer).toHaveCount(0);
-  await expect(menu).toBeVisible();
+  await expect(menu).toHaveCount(0);
+  await expect(pageNumber).toHaveCount(0);
+  await expect(zoom).toHaveCount(0);
   await settings.tap();
-  await page.getByRole('checkbox', { name: '下部バーを表示', exact: true }).check();
+  await expect(showFooter).not.toBeChecked();
+  await showFooter.check();
+  await settings.tap();
   await expect(footer.getByLabel('ページ番号')).toHaveValue('2');
+  await expect(footer.getByLabel('表示倍率')).toBeVisible();
+  expect(await stage.boundingBox()).toEqual(initial);
   await expect(menu).toHaveCount(0);
 });
