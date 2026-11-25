@@ -1040,7 +1040,7 @@ h3 {
   position: absolute;
   z-index: 11;
   left: 10px;
-  bottom: max(8px, env(safe-area-inset-bottom));
+  bottom: max(8px, var(--safe-area-bottom));
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -2162,10 +2162,20 @@ body,
   overscroll-behavior: none;
 }
 .app {
+  --safe-area-bottom: env(safe-area-inset-bottom, 0px);
   height: var(--app-height, 100dvh);
   min-height: 0;
-  padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px)
-    env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
+  padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) var(--safe-area-bottom)
+    env(safe-area-inset-left, 0px);
+}
+.editor.is-footer-hidden {
+  padding-bottom: 0;
+}
+.editor.is-footer-hidden .page-sidebar {
+  padding-bottom: var(--safe-area-bottom);
+}
+.editor.is-footer-hidden .stage-note {
+  display: none;
 }
 .editor-header {
   height: auto;

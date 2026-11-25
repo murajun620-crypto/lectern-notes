@@ -101,6 +101,7 @@ type Props = {
   trail: boolean;
   registerPlayback: RegisterPlayback;
   fitWidth: boolean;
+  showFooter: boolean;
   zoom: number;
   onInkScaleChange: (scale: number) => void;
   inkClipboard: Stroke[];
@@ -134,6 +135,7 @@ export default function Stage({
   trail,
   registerPlayback,
   fitWidth,
+  showFooter,
   zoom,
   onInkScaleChange,
   inkClipboard,
@@ -245,6 +247,7 @@ export default function Stage({
     erasure?: { id: string; width: number };
   } | null>(null);
   const stylusContact = useRef<number | null>(null);
+  const nativeLaserContact = useRef<number | null>(null);
   // Do not adopt stale motion from a finished contact or one that started on a control.
   const knownPencilIds = useRef(new Set<number>());
   const latestPencilEnd = useRef(-Infinity);
@@ -288,7 +291,14 @@ export default function Stage({
     if (stage && !stage.hasAttribute('data-ink-preview'))
       stage.setAttribute('data-ink-preview', '');
   }, []);
-  const stack = usePageStack(continuousPages, page, size, fitWidth, onFocusPage);
+  const stack = usePageStack(
+    continuousPages,
+    page,
+    size,
+    fitWidth,
+    showFooter ? 48 : 0,
+    onFocusPage,
+  );
   const {
     fit,
     captureLocation,
@@ -501,6 +511,7 @@ export default function Stage({
     pinch.current = null;
     nativePinch.current = null;
     lasers.current = [];
+    nativeLaserContact.current = null;
     tap.current = null;
     swipe.current = null;
     stylusContact.current = null;
@@ -519,6 +530,8 @@ export default function Stage({
       tap.current = null;
       swipe.current = null;
       stylusContact.current = null;
+      nativeLaserContact.current = null;
+      lasers.current = [];
       clearInkGesture();
     };
     const stopOutsideStage = (e: PointerEvent | KeyboardEvent) => {
@@ -1290,10 +1303,7 @@ export default function Stage({
       return;
     }
     const g = gesture.current;
-    if (!g || (g.pencil ? g.pencil.pointerId !== e.pointerId : g.id !== e.pointerId)) {
-      if (tool === 'laser' && e.pointerType === 'pen') moveLaser(e);
-      return;
-    }
+    if (!g || (g.pencil ? g.pencil.pointerId !== e.pointerId : g.id !== e.pointerId)) return;
     if (g.kind === 'pan') {
       if (Math.hypot(e.clientX - g.client.x, e.clientY - g.client.y) >= 5) g.moved = true;
       if (tool === 'select' && e.pointerType === 'touch' && !g.moved) return;
@@ -1307,7 +1317,14 @@ export default function Stage({
       return;
     }
     if (g.kind === 'laser') {
-      if (e.pointerType !== 'touch' || fingerInk) moveLaser(e);
+      if (g.pointerType === 'pen' && (e.buttons & 1) === 0 && e.pressure <= 0) {
+        // A hover can be the first event received after a lost release.
+        if (nativeLaserContact.current === null) {
+          gesture.current = null;
+          lasers.current = [];
+          palm.current.penUp(e.pointerId, performance.now());
+        }
+      } else if (g.pointerType !== 'touch' || fingerInk) moveLaser(e);
       return;
     }
     if (g.kind === 'draw') {
@@ -1360,6 +1377,14 @@ export default function Stage({
     }
     const g = gesture.current;
     if (!g || (g.pencil ? g.pencil.pointerId !== e.pointerId : g.id !== e.pointerId)) return;
+    if (g.kind === 'laser' && g.pointerType === 'pen') {
+      if (nativeLaserContact.current !== null) {
+        stylusContact.current = null;
+        palm.current.penUp(nativePencil, performance.now());
+      }
+      nativeLaserContact.current = null;
+      lasers.current = [];
+    }
     if (g.pencil) {
       if (!g.pencil.pointerEnded && e.timeStamp >= g.pencil.downAt) {
         if (!cancel) appendPencilSamples(e.nativeEvent, g, true);
@@ -1438,6 +1463,14 @@ export default function Stage({
     if (stylusContact.current === contact.identifier) {
       stylusContact.current = null;
       palm.current.penUp(nativePencil, performance.now());
+    }
+    if (nativeLaserContact.current === contact.identifier) {
+      nativeLaserContact.current = null;
+      lasers.current = [];
+      if (g?.kind === 'laser' && g.pointerType === 'pen') {
+        gesture.current = null;
+        palm.current.penUp(g.id, performance.now());
+      }
     }
     if (
       g &&
@@ -1726,16 +1759,14 @@ export default function Stage({
               'touch',
             );
           } else {
-            if (
-              tool === 'laser' &&
-              !fingerInk &&
-              !interactive &&
-              gesture.current?.pointerType !== 'pen'
-            ) {
-              // Safari can identify the stylus in Touch Events when its pointer is reported as touch.
-              preparePencil();
-              palm.current.penDown(nativePencil, performance.now());
-              moveLaser(stylus);
+            if (tool === 'laser' && !interactive) {
+              if (gesture.current?.pointerType !== 'pen') {
+                // Safari can identify the stylus even when its pointer is reported as touch.
+                preparePencil();
+                palm.current.penDown(nativePencil, performance.now());
+                moveLaser(stylus);
+              }
+              nativeLaserContact.current = stylus.identifier;
             }
             stylusContact.current = stylus.identifier;
           }
@@ -1845,12 +1876,8 @@ export default function Stage({
           if (!selectingText) linkPress.current = null;
           if (
             tool === 'laser' &&
-            !fingerInk &&
-            stylusContact.current === contact.identifier &&
-            gesture.current?.pointerType !== 'pen' &&
-            !(e.target as Element).closest(
-              '.video-box,[data-video-control],[data-selection-control]',
-            )
+            nativeLaserContact.current === contact.identifier &&
+            gesture.current?.pointerType !== 'pen'
           ) {
             moveLaser(contact);
             return;

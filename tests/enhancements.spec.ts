@@ -249,10 +249,21 @@ test('laser mode follows the finger ink setting without blocking finger navigati
   await nativeTouch(page, 'touchend', [], [backEnd]);
   await expect(pageNumber).toHaveValue('1');
 
+  const hover = (clientX: number, clientY: number) =>
+    pointer(page, 'pointermove', 33, 'pen', clientX, clientY, {
+      button: -1,
+      buttons: 0,
+      pressure: 0,
+    });
+  await hover(x - 60, y - 60);
+  expect(await laserAt(x - 60, y - 60)).toBe(false);
   await pointer(page, 'pointerdown', 33, 'pen', x, y - 60);
-  await pointer(page, 'pointermove', 33, 'pen', x + 40, y - 60);
+  await pointer(page, 'pointermove', 33, 'pen', x + 40, y - 60, { pressure: 0 });
   await expect.poll(() => laserAt(x + 40, y - 60)).toBe(true);
   await pointer(page, 'pointerup', 33, 'pen', x + 40, y - 60);
+  expect(await laserAt(x + 40, y - 60)).toBe(false);
+  await hover(x + 100, y - 60);
+  expect(await laserAt(x + 100, y - 60)).toBe(false);
 
   const stylus = { identifier: 34, clientX: x, clientY: y - 25, touchType: 'stylus' };
   const stylusEnd = { ...stylus, clientX: x + 40 };
@@ -260,6 +271,7 @@ test('laser mode follows the finger ink setting without blocking finger navigati
   await nativeTouch(page, 'touchmove', [stylusEnd]);
   await expect.poll(() => laserAt(stylusEnd.clientX, stylusEnd.clientY)).toBe(true);
   await nativeTouch(page, 'touchend', [], [stylusEnd]);
+  expect(await laserAt(stylusEnd.clientX, stylusEnd.clientY)).toBe(false);
 
   await page.mouse.move(x, y + 60);
   await page.mouse.down();
@@ -1563,6 +1575,40 @@ test('iPad-sized layout keeps editing controls and ink palettes in the fullscree
   await expect(highlighterWidth).toHaveValue('34.9');
   await expect(highlighterSlider).toHaveValue('34.9');
   await expect(swatch('蛍光ペン', 2)).toHaveCSS('--swatch', '#ff7a20');
+});
+
+test('hiding the footer lets the PDF fill the iPad bottom safe area', async ({ page }) => {
+  await page.setViewportSize({ width: 1024, height: 768 });
+  await demo(page);
+  const inset = 20;
+  await page.addStyleTag({ content: `.app { --safe-area-bottom: ${inset}px; }` });
+  const stage = page.getByTestId('stage');
+  const footer = page.locator('.editor-footer');
+  const addBlank = page.getByRole('button', { name: '白紙を追加', exact: true });
+  const bottomGap = (target: typeof stage) =>
+    target.evaluate((element) => {
+      const bottom = element.closest('.app')!.getBoundingClientRect().bottom;
+      return bottom - element.getBoundingClientRect().bottom;
+    });
+  const settings = page.getByLabel('入力設定', { exact: true });
+  const showFooter = page.getByRole('checkbox', { name: '下部バーを表示', exact: true });
+  expect(await bottomGap(footer)).toBeCloseTo(inset);
+  const originalStageGap = await bottomGap(stage);
+
+  await settings.click();
+  await showFooter.uncheck();
+  await settings.click();
+  await expect(footer).toHaveCount(0);
+  expect(await bottomGap(stage)).toBeCloseTo(0);
+  await expect.poll(() => bottomGap(page.getByTestId('pdf-page'))).toBeCloseTo(0, 0);
+  expect(await bottomGap(addBlank)).toBeGreaterThanOrEqual(inset);
+  await expect(page.getByText('ページ・表示', { exact: true })).toBeVisible();
+
+  await settings.click();
+  await showFooter.check();
+  await settings.click();
+  expect(await bottomGap(footer)).toBeCloseTo(inset);
+  expect(await bottomGap(stage)).toBeCloseTo(originalStageGap);
 });
 
 test('nib samples match the displayed ink at the current fit and zoom', async ({ page }) => {

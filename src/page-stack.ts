@@ -1,9 +1,12 @@
 import type { Page } from './model';
 
 type Size = { w: number; h: number };
-export function pageFit(page: Page, size: Size, fitWidth: boolean) {
+export function pageFit(page: Page, size: Size, fitWidth: boolean, verticalInset: number) {
   const widthFit = (size.w - 56) / page.width;
-  return Math.max(0.05, fitWidth ? widthFit : Math.min(widthFit, (size.h - 48) / page.height));
+  return Math.max(
+    0.05,
+    fitWidth ? widthFit : Math.min(widthFit, (size.h - verticalInset) / page.height),
+  );
 }
 
 export function pageContentBounds(page: Page) {
@@ -27,10 +30,15 @@ export type StackPage = {
   center: number;
 };
 
-export function buildPageStack(pages: Page[], size: Size, fitWidth: boolean) {
+export function buildPageStack(
+  pages: Page[],
+  size: Size,
+  fitWidth: boolean,
+  verticalInset: number,
+) {
   let y = 0;
   return pages.map((page) => {
-    const fit = pageFit(page, size, fitWidth);
+    const fit = pageFit(page, size, fitWidth, verticalInset);
     const bounds = pageContentBounds(page);
     const top = y - bounds.top * fit;
     const item: StackPage = {

@@ -977,7 +977,7 @@ export default function App() {
   const visibleSaveIssue = !error && showSaveIssue && saveIssue;
   return (
     <div
-      className={`app ${project ? 'editor' : 'library'} ${fullscreen ? 'is-fullscreen' : ''}`}
+      className={`app ${project ? 'editor' : 'library'} ${fullscreen ? 'is-fullscreen' : ''} ${project && !preferences.showFooter ? 'is-footer-hidden' : ''}`}
       {...inkControlGuard}
       onClick={(e) => {
         const target = e.target as Element;
@@ -1797,6 +1797,7 @@ export default function App() {
                   trail={trail}
                   registerPlayback={registerPlayback}
                   fitWidth={fitWidth}
+                  showFooter={preferences.showFooter}
                   onInkScaleChange={syncNibScale}
                   zoom={zoom}
                   setZoom={setZoom}

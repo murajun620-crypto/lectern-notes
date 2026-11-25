@@ -15,11 +15,12 @@ export function usePageStack(
   page: Page,
   size: { w: number; h: number },
   fitWidth: boolean,
+  verticalInset: number,
   onFocusPage: (id: string) => void,
 ) {
   const stack = useMemo(
-    () => (pages ? buildPageStack(pages, size, fitWidth) : []),
-    [pages, size, fitWidth],
+    () => (pages ? buildPageStack(pages, size, fitWidth, verticalInset) : []),
+    [pages, size, fitWidth, verticalInset],
   );
   const currentStack = useRef(stack);
   currentStack.current = stack;
@@ -27,7 +28,7 @@ export function usePageStack(
   const active = byId.get(page.id);
   const activeId = active?.page.id;
   const activeCenter = active?.center;
-  const fit = active?.fit ?? pageFit(page, size, fitWidth);
+  const fit = active?.fit ?? pageFit(page, size, fitWidth, verticalInset);
   const captureLocation = useCallback(
     (view: PageView): StageLocation => {
       const y = -view.pan.y / view.zoom;
