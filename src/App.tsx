@@ -1550,7 +1550,7 @@ export default function App() {
                   指でも筆記する
                 </label>
                 <small>
-                  通常はOFF。指は移動、Pencilは直前の筆記ツールを使用します。「移動」への切替は不要です。
+                  オフでは、レーザーを選んでいても指で移動できます。「移動」中はPencilで直前の筆記ツールを使えます。オンでは指でも筆記やレーザー操作ができます。
                 </small>
                 <label>
                   <input

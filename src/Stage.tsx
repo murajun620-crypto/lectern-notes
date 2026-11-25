@@ -680,6 +680,8 @@ export default function Stage({
       p: pencilPressure && e.pointerType === 'pen' ? (e.pressure ?? 0.5) : 0.5,
     };
   };
+  const moveLaser = (contact: Pick<ContactStart, 'clientX' | 'clientY'>) =>
+    lasers.current.push({ ...point(contact), t: performance.now() });
   const appendPoint = (points: Point[], p: Point, spacing: number) => {
     const last = points.at(-1)!;
     if (Math.hypot(p.x - last.x, p.y - last.y) <= spacing) return false;
@@ -974,10 +976,7 @@ export default function Stage({
     const playbackTap = e.pointerType === 'touch' ? (playingVideo ?? undefined) : undefined;
     const isInk =
       !playbackTap &&
-      (e.pointerType !== 'touch' ||
-        fingerInk ||
-        tool === 'laser' ||
-        (selectedTool === 'select' && inSelection));
+      (e.pointerType !== 'touch' || fingerInk || (selectedTool === 'select' && inSelection));
     let kind: GestureKind = 'pan';
     if (isInk) {
       if (selectedTool === 'pen' || selectedTool === 'highlighter') kind = 'draw';
@@ -1046,7 +1045,7 @@ export default function Stage({
       !gesture.current &&
       !(e.target as Element).closest('[data-ink-resize]') &&
       e.button === 0 &&
-      (e.pointerType !== 'touch' || (!playingVideo && (fingerInk || tool === 'laser'))) &&
+      (e.pointerType !== 'touch' || (!playingVideo && fingerInk)) &&
       effectiveTool(tool, pencilTool, e.pointerType, fingerInk) !== 'hand'
     ) {
       const box = viewport.current!.getBoundingClientRect();
@@ -1292,8 +1291,7 @@ export default function Stage({
     }
     const g = gesture.current;
     if (!g || (g.pencil ? g.pencil.pointerId !== e.pointerId : g.id !== e.pointerId)) {
-      if (tool === 'laser' && e.pointerType === 'pen')
-        lasers.current.push({ ...point(e), t: performance.now() });
+      if (tool === 'laser' && e.pointerType === 'pen') moveLaser(e);
       return;
     }
     if (g.kind === 'pan') {
@@ -1309,7 +1307,7 @@ export default function Stage({
       return;
     }
     if (g.kind === 'laser') {
-      lasers.current.push({ ...point(e), t: performance.now() });
+      if (e.pointerType !== 'touch' || fingerInk) moveLaser(e);
       return;
     }
     if (g.kind === 'draw') {
@@ -1575,7 +1573,6 @@ export default function Stage({
           stopCoast() &&
           (e.pointerType !== 'touch' ||
             fingerInk ||
-            tool === 'laser' ||
             tool === 'select' ||
             target.closest('.video-box,[data-video-control],[data-selection-control]'))
         ) {
@@ -1711,10 +1708,10 @@ export default function Stage({
         if (stylus) {
           if (!selectingText) linkPress.current = null;
           const target = e.target as Element;
-          if (
-            writingWithPencil &&
-            !target.closest('.video-box,[data-video-control],[data-selection-control]')
-          ) {
+          const interactive = target.closest(
+            '.video-box,[data-video-control],[data-selection-control]',
+          );
+          if (writingWithPencil && !interactive) {
             startPencil(
               {
                 target,
@@ -1728,7 +1725,20 @@ export default function Stage({
               },
               'touch',
             );
-          } else stylusContact.current = stylus.identifier;
+          } else {
+            if (
+              tool === 'laser' &&
+              !fingerInk &&
+              !interactive &&
+              gesture.current?.pointerType !== 'pen'
+            ) {
+              // Safari can identify the stylus in Touch Events when its pointer is reported as touch.
+              preparePencil();
+              palm.current.penDown(nativePencil, performance.now());
+              moveLaser(stylus);
+            }
+            stylusContact.current = stylus.identifier;
+          }
           return;
         }
         const { pan } = view.current;
@@ -1788,7 +1798,6 @@ export default function Stage({
           e.touches.length !== 1 ||
           nativeTextGesture ||
           (fingerInk && !selectingText) ||
-          tool === 'laser' ||
           interactive ||
           gesture.current?.kind === 'move' ||
           gesture.current?.kind === 'resize' ||
@@ -1834,6 +1843,18 @@ export default function Stage({
         );
         if (contact) {
           if (!selectingText) linkPress.current = null;
+          if (
+            tool === 'laser' &&
+            !fingerInk &&
+            stylusContact.current === contact.identifier &&
+            gesture.current?.pointerType !== 'pen' &&
+            !(e.target as Element).closest(
+              '.video-box,[data-video-control],[data-selection-control]',
+            )
+          ) {
+            moveLaser(contact);
+            return;
+          }
           if (
             stylusContact.current !== contact.identifier &&
             (contact as StylusTouch).touchType === 'stylus' &&
@@ -2158,7 +2179,9 @@ export default function Stage({
       )}
       <div className="stage-note">
         {tool === 'laser'
-          ? '触れて動かすとレーザーを表示'
+          ? fingerInk
+            ? '触れて動かすとレーザーを表示'
+            : 'Pencil・マウスでレーザー · 指で移動'
           : selectingText
             ? '文字をドラッグ、または長押ししてコピー'
             : tool === 'select'

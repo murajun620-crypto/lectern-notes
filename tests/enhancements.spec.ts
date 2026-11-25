@@ -187,6 +187,107 @@ test('finger writing accepts broad contacts and yields to native pinch on a phon
   expect((await stored(page))[0].pages[0].strokes).toHaveLength(1);
 });
 
+test('laser mode follows the finger ink setting without blocking finger navigation', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1024, height: 768 });
+  await demo(page);
+  await page.evaluate(() => {
+    HTMLElement.prototype.setPointerCapture = function () {};
+  });
+  const settings = page.getByLabel('入力設定', { exact: true });
+  const fingerInk = page.getByRole('checkbox', { name: '指でも筆記する', exact: true });
+  await settings.click();
+  await expect(fingerInk).not.toBeChecked();
+  await settings.click();
+  const laser = page.getByRole('button', { name: 'レーザー', exact: true });
+  await laser.click();
+
+  const paper = page.getByTestId('pdf-page');
+  const r = (await paper.boundingBox())!;
+  const x = r.x + r.width / 2;
+  const y = r.y + r.height / 2;
+  const laserAt = (clientX: number, clientY: number) =>
+    page.locator('.laser-canvas').evaluate(
+      async (canvas: HTMLCanvasElement, position) => {
+        // Wait for the laser animation to paint before checking a negative assertion.
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+        const box = canvas.getBoundingClientRect();
+        const cx = Math.floor(((position.clientX - box.x) * canvas.width) / box.width);
+        const cy = Math.floor(((position.clientY - box.y) * canvas.height) / box.height);
+        const pixels = canvas.getContext('2d')!.getImageData(cx - 2, cy - 2, 5, 5).data;
+        return pixels.some((value, i) => i % 4 === 3 && value > 0);
+      },
+      { clientX, clientY },
+    );
+
+  const scrollStart = { identifier: 30, clientX: x, clientY: y };
+  const scrollEnd = { ...scrollStart, clientY: y - 100 };
+  await nativeTouch(page, 'touchstart', [scrollStart]);
+  await nativeTouch(page, 'touchmove', [scrollEnd]);
+  await expect.poll(async () => (await paper.boundingBox())!.y).toBeLessThan(r.y - 90);
+  expect(await laserAt(x, y - 100)).toBe(false);
+  await nativeTouch(page, 'touchend', [], [scrollEnd]);
+
+  await page.getByLabel('ページ表示').selectOption('single');
+  const pageNumber = page.getByLabel('ページ番号');
+  const start = { identifier: 31, clientX: x + 60, clientY: y };
+  const end = { ...start, clientX: x - 60 };
+  await pointer(page, 'pointerdown', start.identifier, 'touch', start.clientX, y);
+  await nativeTouch(page, 'touchstart', [start]);
+  await pointer(page, 'pointermove', end.identifier, 'touch', end.clientX, y);
+  await nativeTouch(page, 'touchmove', [end]);
+  expect(await laserAt(end.clientX, y)).toBe(false);
+  await pointer(page, 'pointerup', end.identifier, 'touch', end.clientX, y);
+  await nativeTouch(page, 'touchend', [], [end]);
+  await expect(pageNumber).toHaveValue('2');
+
+  const backStart = { ...end, identifier: 32 };
+  const backEnd = { ...start, identifier: 32 };
+  await nativeTouch(page, 'touchstart', [backStart]);
+  await nativeTouch(page, 'touchmove', [backEnd]);
+  await nativeTouch(page, 'touchend', [], [backEnd]);
+  await expect(pageNumber).toHaveValue('1');
+
+  await pointer(page, 'pointerdown', 33, 'pen', x, y - 60);
+  await pointer(page, 'pointermove', 33, 'pen', x + 40, y - 60);
+  await expect.poll(() => laserAt(x + 40, y - 60)).toBe(true);
+  await pointer(page, 'pointerup', 33, 'pen', x + 40, y - 60);
+
+  const stylus = { identifier: 34, clientX: x, clientY: y - 25, touchType: 'stylus' };
+  const stylusEnd = { ...stylus, clientX: x + 40 };
+  await nativeTouch(page, 'touchstart', [stylus]);
+  await nativeTouch(page, 'touchmove', [stylusEnd]);
+  await expect.poll(() => laserAt(stylusEnd.clientX, stylusEnd.clientY)).toBe(true);
+  await nativeTouch(page, 'touchend', [], [stylusEnd]);
+
+  await page.mouse.move(x, y + 60);
+  await page.mouse.down();
+  await page.mouse.move(x + 40, y + 60, { steps: 4 });
+  await expect.poll(() => laserAt(x + 40, y + 60)).toBe(true);
+  await page.mouse.up();
+  // The mouse trail outlasts the preceding Pencil contact's palm-rejection window.
+  await expect.poll(() => laserAt(x + 40, y + 60)).toBe(false);
+
+  await settings.click();
+  await fingerInk.check();
+  await settings.click();
+  const fingerStart = { ...start, identifier: 35 };
+  const fingerEnd = { ...end, identifier: 35 };
+  await pointer(page, 'pointerdown', fingerStart.identifier, 'touch', fingerStart.clientX, y);
+  await nativeTouch(page, 'touchstart', [fingerStart]);
+  await pointer(page, 'pointermove', fingerEnd.identifier, 'touch', fingerEnd.clientX, y);
+  await nativeTouch(page, 'touchmove', [fingerEnd]);
+  await expect.poll(() => laserAt(fingerEnd.clientX, y)).toBe(true);
+  await pointer(page, 'pointerup', fingerEnd.identifier, 'touch', fingerEnd.clientX, y);
+  await nativeTouch(page, 'touchend', [], [fingerEnd]);
+  await expect(pageNumber).toHaveValue('1');
+  await expect(laser).toHaveAttribute('aria-pressed', 'true');
+  expect(
+    (await stored(page))[0].pages.every((sheet: { strokes: unknown[] }) => !sheet.strokes.length),
+  ).toBe(true);
+});
+
 test('real broad-finger touch events can draw and pinch with finger ink enabled', async ({
   browser,
   browserName,
