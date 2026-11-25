@@ -134,9 +134,10 @@ export function drawPdfInk(page: PDFPage, strokes: Stroke[]) {
       if (stroke.penKind === 'pencil') {
         const name = `Graphite${color}`;
         patterns[name] ??= graphitePattern(page, color);
-        content.push(`/Pattern cs /${name} scn`);
-      } else content.push(`${components} rg`);
-      content.push(inkPath(stroke), 'f');
+        content.push(stroke.polygon ? `/Pattern CS /${name} SCN` : `/Pattern cs /${name} scn`);
+      } else content.push(`${components} ${stroke.polygon ? 'RG' : 'rg'}`);
+      if (stroke.polygon) content.push(`${pt(stroke.width)} w 1 j`);
+      content.push(inkPath(stroke), stroke.polygon ? 'S' : 'f');
     }
     content.push('Q');
   }

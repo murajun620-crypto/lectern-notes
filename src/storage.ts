@@ -265,6 +265,20 @@ export function validateProject(p: unknown): asserts p is Project {
           !finite(pt.p, 0, 1)
         )
           return fail();
+      if (s.polygon !== undefined) {
+        const count = s.points.length;
+        const first = s.points[0];
+        const last = s.points.at(-1)!;
+        if (
+          s.polygon !== true ||
+          s.tool !== 'pen' ||
+          s.circle !== undefined ||
+          (count !== 4 && count !== 5) ||
+          first.x !== last.x ||
+          first.y !== last.y
+        )
+          return fail();
+      }
       if (s.erasures !== undefined) {
         if (!Array.isArray(s.erasures) || s.erasures.length > 10000) return fail();
         let count = 0;

@@ -4,7 +4,8 @@ type Position = Pick<Point, 'x' | 'y'>;
 
 export type SnapShape =
   | { kind: 'line'; start: Position; end: Position }
-  | { kind: 'circle'; center: Position; radius: number; startAngle: number; direction: 1 | -1 };
+  | { kind: 'circle'; center: Position; radius: number; startAngle: number; direction: 1 | -1 }
+  | { kind: 'triangle' | 'quadrilateral'; vertices: readonly Position[] };
 
 const fullTurn = 2 * Math.PI;
 
@@ -130,6 +131,112 @@ function fitCircle(
   return { kind: 'circle', center, radius, startAngle, direction: turn > 0 ? 1 : -1 };
 }
 
+function farthestPoint(points: readonly Position[], from: number) {
+  const origin = points[from];
+  let farthest = from;
+  let maxDistance = 0;
+  for (let index = 0; index < points.length; index++) {
+    const distance = (points[index].x - origin.x) ** 2 + (points[index].y - origin.y) ** 2;
+    if (distance > maxDistance) {
+      farthest = index;
+      maxDistance = distance;
+    }
+  }
+  return farthest;
+}
+
+function polygonCorners(points: readonly Point[], tolerance: number): Position[] | null {
+  // Split the loop at distant points so the pen can start anywhere along an edge.
+  const firstAnchor = farthestPoint(points, 0);
+  const secondAnchor = farthestPoint(points, firstAnchor);
+  const start = Math.min(firstAnchor, secondAnchor);
+  const other = Math.abs(firstAnchor - secondAnchor);
+  const ring = [...points.slice(start), ...points.slice(0, start + 1)];
+  const corners = [0, other];
+  const segments = [
+    [0, other],
+    [other, ring.length - 1],
+  ];
+  const toleranceSquared = tolerance ** 2;
+
+  while (segments.length) {
+    const [from, to] = segments.pop()!;
+    const a = ring[from];
+    const b = ring[to];
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const lengthSquared = dx * dx + dy * dy;
+    let splitAt = -1;
+    let maxDistance = toleranceSquared;
+
+    for (let index = from + 1; index < to; index++) {
+      const x = ring[index].x - a.x;
+      const y = ring[index].y - a.y;
+      const fraction = Math.max(0, Math.min(1, (x * dx + y * dy) / lengthSquared));
+      const distance = (x - fraction * dx) ** 2 + (y - fraction * dy) ** 2;
+      if (distance > maxDistance) {
+        maxDistance = distance;
+        splitAt = index;
+      }
+    }
+
+    if (splitAt < 0) continue;
+    if (corners.length === 4) return null;
+    corners.push(splitAt);
+    segments.push([from, splitAt], [splitAt, to]);
+  }
+
+  return corners
+    .sort((a, b) => a - b)
+    .map((index) => {
+      const { x, y } = ring[index];
+      return { x, y };
+    });
+}
+
+function fitPolygon(
+  points: readonly Point[],
+  pathLength: number,
+  gap: number,
+  screenScale: number,
+): SnapShape | null {
+  if (
+    points.length < 4 ||
+    pathLength * screenScale < 90 ||
+    gap > Math.min(pathLength * 0.08, 22 / screenScale)
+  ) {
+    return null;
+  }
+
+  const tolerance = Math.min(10, Math.max(2.5, pathLength * screenScale * 0.021)) / screenScale;
+  const vertices = polygonCorners(points, tolerance);
+  if (!vertices || vertices.length < 3) return null;
+
+  const sideMinimum = Math.max(16 / screenScale, pathLength * 0.05);
+  let perimeter = 0;
+  let turn = 0;
+  for (let index = 0; index < vertices.length; index++) {
+    const a = vertices[index];
+    const b = vertices[(index + 1) % vertices.length];
+    const c = vertices[(index + 2) % vertices.length];
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const nextX = c.x - b.x;
+    const nextY = c.y - b.y;
+    const length = Math.hypot(dx, dy);
+    if (length < sideMinimum) return null;
+
+    // Clear, consistently turning corners rule out crossing and nearly flat outlines.
+    const corner = (dx * nextY - dy * nextX) / (length * Math.hypot(nextX, nextY));
+    if (Math.abs(corner) < 0.35 || corner * turn < 0) return null;
+    turn = Math.sign(corner);
+    perimeter += length;
+  }
+
+  if (pathLength + gap > perimeter * 1.16) return null;
+  return { kind: vertices.length === 3 ? 'triangle' : 'quadrilateral', vertices };
+}
+
 /** Fit only unambiguous, screen-sized single strokes. Returned coordinates stay in PDF points. */
 export function detectSnapShape(points: readonly Point[], screenScale: number): SnapShape | null {
   if (points.length < 2 || !Number.isFinite(screenScale) || screenScale <= 0) return null;
@@ -142,6 +249,8 @@ export function detectSnapShape(points: readonly Point[], screenScale: number): 
   const last = points[points.length - 1];
   const gap = Math.hypot(last.x - first.x, last.y - first.y);
   return (
-    fitLine(points, pathLength, gap, screenScale) ?? fitCircle(points, pathLength, gap, screenScale)
+    fitLine(points, pathLength, gap, screenScale) ??
+    fitCircle(points, pathLength, gap, screenScale) ??
+    fitPolygon(points, pathLength, gap, screenScale)
   );
 }

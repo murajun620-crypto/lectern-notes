@@ -1404,6 +1404,83 @@ test.describe('pen shape snapping', () => {
     expect(await strokes(page)).toEqual([saved]);
   });
 
+  const polygons = [
+    {
+      kind: 'triangle',
+      corners: [
+        [0, 0],
+        [132, 0],
+        [55, 104],
+      ],
+    },
+    {
+      kind: 'quadrilateral',
+      corners: [
+        [0, 0],
+        [128, 0],
+        [114, 92],
+        [10, 92],
+      ],
+    },
+  ] as const;
+
+  for (const { kind, corners } of polygons) {
+    test(`holding a closed Pencil ${kind} previews and saves one undoable shape`, async ({
+      page,
+    }) => {
+      await demo(page);
+      const stage = page.getByTestId('stage');
+      const paper = (await page.getByTestId('pdf-page').boundingBox())!;
+      const x = Math.round(paper.x + paper.width * 0.3);
+      const y = Math.round(paper.y + paper.height * 0.35);
+      const tip = (dx: number, dy: number) => ({
+        identifier: 46,
+        clientX: x + dx,
+        clientY: y + dy,
+        touchType: 'stylus',
+        force: 0.4,
+      });
+
+      await nativeTouch(page, 'touchstart', [tip(...corners[0])]);
+      for (const [index, [fromX, fromY]] of corners.entries()) {
+        const [toX, toY] = corners[index + 1] ?? [3, 2];
+        for (let step = 1; step <= 8; step++) {
+          const fraction = step / 8;
+          const wobble = 2 * Math.sin(Math.PI * 2 * fraction);
+          await nativeTouch(page, 'touchmove', [
+            tip(fromX + (toX - fromX) * fraction, fromY + (toY - fromY) * fraction + wobble),
+          ]);
+        }
+      }
+
+      await expect(stage).toHaveAttribute('data-shape-snap', kind);
+      await expect.poll(() => draftAlpha(page, x + corners[1][0] / 2, y, 5)).toBe(true);
+      expect(await strokes(page)).toHaveLength(0);
+
+      // A trailing position from the lift event must not reopen the corrected shape.
+      await nativeTouch(page, 'touchend', [], [tip(30, -15)]);
+      await expect(stage).not.toHaveAttribute('data-shape-snap', kind);
+      await expect.poll(async () => (await strokes(page)).length).toBe(1);
+      const savedPage = (await stored(page))[0].pages[0];
+      const { points } = (await strokes(page))[0];
+      expect(points.at(-1)).toEqual(points[0]);
+      const screenPoints = points.map((point) => ({
+        x: paper.x + (point.x / savedPage.width) * paper.width,
+        y: paper.y + (point.y / savedPage.height) * paper.height,
+      }));
+      for (const [dx, dy] of corners) {
+        expect(
+          screenPoints.some((point) => Math.hypot(point.x - x - dx, point.y - y - dy) < 9),
+        ).toBe(true);
+      }
+
+      const undo = page.getByRole('button', { name: '元に戻す', exact: true });
+      await undo.click();
+      await expect(undo).toBeDisabled();
+      await expect.poll(async () => (await strokes(page)).length).toBe(0);
+    });
+  }
+
   test('keeps moving, short, and highlighter strokes freehand', async ({ page }) => {
     await demo(page);
     const stage = page.getByTestId('stage');
@@ -1416,17 +1493,17 @@ test.describe('pen shape snapping', () => {
     for (let step = 1; step <= 8; step++) {
       // Total contact lasts longer than the hold delay, but the pen keeps moving.
       await page.waitForTimeout(125);
-      await expect(stage).not.toHaveAttribute('data-shape-snap', /line|circle/);
+      await expect(stage).not.toHaveAttribute('data-shape-snap');
       await page.mouse.move(x + step * 16, y + 3 * Math.sin(step));
     }
-    await expect(stage).not.toHaveAttribute('data-shape-snap', /line|circle/);
+    await expect(stage).not.toHaveAttribute('data-shape-snap');
     await page.mouse.up();
 
     await page.mouse.move(x, y + 35);
     await page.mouse.down();
     await page.mouse.move(x + 9, y + 37, { steps: 5 });
     await page.waitForTimeout(800);
-    await expect(stage).not.toHaveAttribute('data-shape-snap', /line|circle/);
+    await expect(stage).not.toHaveAttribute('data-shape-snap');
     await page.mouse.up();
 
     await page.getByRole('button', { name: '蛍光ペン', exact: true }).click();
@@ -1434,7 +1511,7 @@ test.describe('pen shape snapping', () => {
     await page.mouse.down();
     await page.mouse.move(x + 144, y + 70, { steps: 12 });
     await page.waitForTimeout(800);
-    await expect(stage).not.toHaveAttribute('data-shape-snap', /line|circle/);
+    await expect(stage).not.toHaveAttribute('data-shape-snap');
     await page.mouse.up();
 
     await expect.poll(async () => (await strokes(page)).length).toBe(3);

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { PDFDict, PDFDocument, PDFName, PDFRawStream, decodePDFRawStream } from 'pdf-lib';
 import {
   blankPage,
   parseYoutubeUrl,
@@ -10,7 +11,24 @@ import {
   transformStroke,
   type Stroke,
 } from './model';
+import { drawPdfInk } from './pdf-ink';
 import { validateProject } from './storage';
+
+const triangleStroke: Stroke = {
+  id: 'triangle',
+  tool: 'pen',
+  penKind: 'pencil',
+  color: '#445566',
+  width: 4,
+  polygon: true,
+  points: [
+    { x: 10, y: 10, p: 0.5 },
+    { x: 90, y: 10, p: 0.5 },
+    { x: 90, y: 90, p: 0.5 },
+    { x: 10, y: 10, p: 0.5 },
+  ],
+};
+
 describe('YouTube URL safety', () => {
   it.each([
     'https://youtu.be/M7lc1UVf-VE?t=3',
@@ -72,6 +90,45 @@ describe('page-space geometry', () => {
     expect(arcs[perCircle - 1].slice(-2)).toEqual([43, 35]);
     expect(arcs.at(-1)!.slice(-2)).toEqual([35, 35]);
   });
+  it('traces one closed path of straight sides after moving and scaling a snapped polygon', () => {
+    const stroke = transformStroke(triangleStroke, 2, 3, -5);
+    const path = {
+      moveTo: vi.fn(),
+      lineTo: vi.fn(),
+      quadraticCurveTo: vi.fn(),
+      bezierCurveTo: vi.fn(),
+      closePath: vi.fn(),
+    };
+    traceInkPath(path, stroke);
+    expect(path.moveTo.mock.calls).toEqual([[23, 15]]);
+    expect(path.lineTo.mock.calls).toEqual([
+      [183, 15],
+      [183, 175],
+    ]);
+    expect(path.closePath).toHaveBeenCalledTimes(1);
+    expect(path.quadraticCurveTo).not.toHaveBeenCalled();
+    expect(path.bezierCurveTo).not.toHaveBeenCalled();
+    expect(strokeHit(stroke, { x: 103, y: 95, p: 0.5 }, 0)).toBe(true);
+    expect(strokeHit(stroke, { x: 138, y: 95, p: 0.5 }, 0)).toBe(false);
+  });
+  it('exports the snapped outline as one textured PDF stroke with its partial erasure', async () => {
+    const doc = await PDFDocument.create();
+    const page = doc.addPage();
+    drawPdfInk(page, [
+      {
+        ...triangleStroke,
+        erasures: [{ id: 'partial', width: 10, points: [{ x: 50, y: 10, p: 0.5 }] }],
+      },
+    ]);
+    const xObjects = page.node.Resources()!.lookup(PDFName.of('XObject'), PDFDict);
+    const [[, ref]] = xObjects.entries();
+    const form = doc.context.lookup(ref);
+    if (!(form instanceof PDFRawStream)) throw new Error('Expected a handwriting form stream');
+    const content = Buffer.from(decodePDFRawStream(form).decode()).toString('ascii');
+    expect(content).toContain('W* n');
+    expect(content).toMatch(/\/Pattern CS \/Graphite\d+ SCN\n4 w 1 j/);
+    expect(content).toContain('10 10 m\n90 10 l\n90 90 l\nh\nS');
+  });
   it('hits segments between sparse pointer samples', () => {
     expect(
       strokeHit(
@@ -130,6 +187,18 @@ describe('backup validation', () => {
       expect(() => validateProject({ ...project, pages: [page] })).toThrow();
     }
     project.pages[0].strokes = [{ ...stroke, tool: 'highlighter' }];
+    expect(() => validateProject(project)).toThrow();
+  });
+  it('accepts a closed snapped polygon and rejects an open one in a backup', () => {
+    const project = valid();
+    project.pages[0].strokes = [triangleStroke];
+    expect(() => validateProject(project)).not.toThrow();
+    project.pages[0].strokes = [
+      {
+        ...triangleStroke,
+        points: [...triangleStroke.points.slice(0, -1), { x: 11, y: 10, p: 0.5 }],
+      },
+    ];
     expect(() => validateProject(project)).toThrow();
   });
   it('accepts optional subject and academic year tags and rejects malformed fields', () => {

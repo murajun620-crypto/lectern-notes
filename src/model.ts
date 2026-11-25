@@ -16,6 +16,8 @@ export type Stroke = {
   points: Point[];
   /** A held pen circle keeps its centerline samples for selection and older readers. */
   circle?: { x: number; y: number; radius: number };
+  /** Trace the closed centerline with straight edges. */
+  polygon?: true;
   erasures?: Erasure[];
 };
 export type Video = {
@@ -162,7 +164,7 @@ const centerlines = new WeakMap<Stroke, { count: number; points: Point[] }>();
 /** Fill widely spaced curves between contacts while keeping the recorded samples intact. */
 export function strokeCenterline(stroke: Stroke): Point[] {
   const { points, width } = stroke;
-  if (stroke.tool !== 'pen' || stroke.circle || points.length < 3) return points;
+  if (stroke.tool !== 'pen' || stroke.circle || stroke.polygon || points.length < 3) return points;
   const cached = centerlines.get(stroke);
   if (cached?.count === points.length) return cached.points;
   let interpolated: Point[] | undefined;
@@ -393,7 +395,7 @@ const emptyInkBounds = () => ({
 export function strokeShape(stroke: Stroke) {
   const count = stroke.points.length;
   const path = new Path2D();
-  if (stroke.tool === 'pen' && stroke.circle) {
+  if (stroke.tool === 'pen' && (stroke.circle || stroke.polygon)) {
     traceInkPath(path, stroke);
     strokePaths.set(stroke, { count, path });
     // Each corrected draft is immutable. Its entire bounds replace the preceding draft.
@@ -440,7 +442,16 @@ function traceCircle(path: InkPath, x: number, y: number, radius: number, revers
 
 /** Canvas and PDF share the same paths for freehand and corrected ink. */
 export function traceInkPath(path: InkPath, stroke: Stroke, outline?: number[][]) {
-  if (stroke.tool === 'highlighter') {
+  if (stroke.polygon) {
+    const [start] = stroke.points;
+    if (!start) return;
+    path.moveTo(start.x, start.y);
+    for (let i = 1; i < stroke.points.length - 1; i++) {
+      const { x, y } = stroke.points[i];
+      path.lineTo(x, y);
+    }
+    path.closePath();
+  } else if (stroke.tool === 'highlighter') {
     traceCurve(path, stroke.points);
     if (stroke.points.length === 1) path.lineTo(stroke.points[0].x + 0.01, stroke.points[0].y);
   } else if (stroke.circle) {
@@ -503,21 +514,22 @@ export function drawStrokes(ctx: CanvasRenderingContext2D, strokes: Stroke[]) {
     const path = cached?.count === stroke.points.length ? cached.path : strokeShape(stroke).path;
     ctx.save();
     if (stroke.erasures?.length) clipErasures(ctx, stroke.erasures);
-    if (stroke.tool === 'highlighter') {
+    let paint: string | CanvasPattern = stroke.color;
+    if (stroke.tool === 'pen' && stroke.penKind === 'pencil') {
+      const grain = graphitePattern(ctx, stroke.color);
+      if (grain) paint = grain;
+      else ctx.globalAlpha *= 0.62;
+    }
+    if (stroke.tool === 'highlighter' || stroke.polygon) {
       // Composite one path so individual segments cannot leave darker joints.
-      ctx.globalAlpha = 0.3;
-      ctx.strokeStyle = stroke.color;
+      if (stroke.tool === 'highlighter') ctx.globalAlpha = 0.3;
+      ctx.strokeStyle = paint;
       ctx.lineWidth = stroke.width;
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
       ctx.stroke(path);
     } else {
-      ctx.fillStyle = stroke.color;
-      if (stroke.penKind === 'pencil') {
-        const grain = graphitePattern(ctx, stroke.color);
-        if (grain) ctx.fillStyle = grain;
-        else ctx.globalAlpha *= 0.62;
-      }
+      ctx.fillStyle = paint;
       ctx.fill(path);
     }
     ctx.restore();

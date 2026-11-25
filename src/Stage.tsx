@@ -92,6 +92,11 @@ function snapStroke(stroke: Stroke, shape: SnapShape): Stroke {
       ],
     };
   }
+  if (shape.kind !== 'circle') {
+    const points = shape.vertices.map((vertex) => ({ ...vertex, p: 0.5 }));
+    points.push(points[0]);
+    return { ...stroke, points, polygon: true };
+  }
   const { center, radius, startAngle, direction } = shape;
   // Keep a closed polyline for hit testing and readers that only understand stroke points.
   const segments = clamp(Math.ceil(Math.PI * Math.sqrt(5 * radius)), 64, 512);

@@ -13,6 +13,26 @@ const loop = (radius: number, direction: 1 | -1, arc = Math.PI * 2, oval = 1, wo
     return point(1035 + (x - y) * Math.SQRT1_2, 620 + (x + y) * Math.SQRT1_2);
   });
 
+function traceOutline(corners: Point[], wobble = 0) {
+  return [
+    corners[0],
+    ...corners.slice(1).flatMap((end, index) => {
+      const start = corners[index];
+      const dx = end.x - start.x;
+      const dy = end.y - start.y;
+      const length = Math.hypot(dx, dy);
+      return Array.from({ length: 12 }, (_, sample) => {
+        const progress = (sample + 1) / 12;
+        const offset = wobble * Math.sin(progress * 2 * Math.PI);
+        return point(
+          start.x + dx * progress - (dy / length) * offset,
+          start.y + dy * progress + (dx / length) * offset,
+        );
+      });
+    }),
+  ];
+}
+
 describe('hold-to-snap geometry', () => {
   it('straightens a rough diagonal line while preserving its endpoints and direction', () => {
     const start = { x: 442, y: 223 };
@@ -51,21 +71,40 @@ describe('hold-to-snap geometry', () => {
     expect(detectSnapShape(loop(48, 1, 2 * Math.PI, 1.45), 1)).toBeNull();
   });
 
-  it('rejects polygonal outlines and loops traced twice', () => {
-    const box = [
-      point(300, 300),
-      point(355, 300),
-      point(355, 355),
-      point(300, 355),
-      point(300, 300),
-    ];
-    const rectangle = box.slice(1).flatMap((b, i) => {
-      const a = box[i];
-      return Array.from({ length: 10 }, (_, n) =>
-        point(a.x + ((b.x - a.x) * n) / 10, a.y + ((b.y - a.y) * n) / 10),
-      );
+  it('straightens a rough tilted triangle, keeping the three drawn corners', () => {
+    const triangle = [point(50, 25), point(118, 112), point(22, 95), point(50, 25)];
+    const outline = traceOutline(triangle, 3);
+    const expected = triangle.slice(0, 3).map(({ x, y }) => ({ x, y }));
+    for (const stroke of [outline, [...outline].reverse()]) {
+      const heldStroke = [...stroke, ...Array<Point>(60).fill(stroke[stroke.length - 1])];
+      expect(detectSnapShape(heldStroke, 1)).toEqual({
+        kind: 'triangle',
+        vertices: expect.arrayContaining(expected),
+      });
+    }
+  });
+
+  it('straightens a tilted quadrilateral started mid-edge with a small gap at the join', () => {
+    const corners = [point(128, 66), point(109, 106), point(29, 66), point(48, 26)];
+    const midEdge = point(73, 38.5);
+    const outline = traceOutline([midEdge, ...corners, midEdge], 2).slice(0, -2);
+    expect(detectSnapShape(outline, 1)).toEqual({
+      kind: 'quadrilateral',
+      vertices: expect.arrayContaining(corners.map(({ x, y }) => ({ x, y }))),
     });
-    expect(detectSnapShape([...rectangle, box[0]], 1)).toBeNull();
+  });
+
+  it('does not close open, self-crossing, or tiny outlines', () => {
+    const box = [point(30, 30), point(90, 30), point(90, 90), point(30, 90)];
+    expect(detectSnapShape(traceOutline(box), 1)).toBeNull();
+    expect(detectSnapShape(traceOutline([box[0], box[2], box[1], box[3], box[0]]), 1)).toBeNull();
+    const small = [point(30, 30), point(42, 30), point(40, 41), point(30, 30)];
+    expect(detectSnapShape(traceOutline(small), 1)).toBeNull();
+  });
+
+  it('rejects loops traced twice', () => {
+    const box = [point(30, 30), point(90, 30), point(90, 90), point(30, 90)];
+    expect(detectSnapShape(traceOutline([...box, ...box, box[0]]), 1)).toBeNull();
     expect(detectSnapShape(loop(48, 1, 4 * Math.PI), 1)).toBeNull();
   });
 });
