@@ -29,6 +29,11 @@ function inkPath(stroke: Stroke) {
         lastX = x;
         lastY = y;
       },
+      bezierCurveTo(ax, ay, bx, by, x, y) {
+        path.push(`${xy(ax, ay)} ${xy(bx, by)} ${xy(x, y)} c`);
+        lastX = x;
+        lastY = y;
+      },
       closePath() {
         path.push('h');
       },

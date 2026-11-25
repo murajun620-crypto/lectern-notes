@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import type { Page } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
+import type { Stroke } from '../src/model';
 
 async function demo(page: Page) {
   await page.goto('/');
@@ -1306,6 +1307,143 @@ test('Pencil paint takes priority over PDF refresh and lift-off cannot extend th
       return (p.strokes[0]?.points.at(-1)?.x / p.width) * paper.width + paper.x;
     })
     .toBeCloseTo(end, 0);
+});
+
+test.describe('pen shape snapping', () => {
+  // Read the independent draft canvas to verify the shape is visible before lift.
+  const draftAlpha = (page: Page, x: number, y: number, radius = 2) =>
+    page.locator('.ink-draft-canvas').evaluate(
+      (canvas: HTMLCanvasElement, at) => {
+        const bounds = canvas.getBoundingClientRect();
+        const cx = Math.floor(((at.x - bounds.left) / bounds.width) * canvas.width);
+        const cy = Math.floor(((at.y - bounds.top) / bounds.height) * canvas.height);
+        const span = at.radius * 2 + 1;
+        return canvas
+          .getContext('2d')!
+          .getImageData(cx - at.radius, cy - at.radius, span, span)
+          .data.some((value, i) => i % 4 === 3 && value > 0);
+      },
+      { x, y, radius },
+    );
+  const strokes = async (page: Page): Promise<Stroke[]> =>
+    (await stored(page))[0]?.pages[0]?.strokes ?? [];
+
+  test('holding a native Pencil stroke previews a straight line and saves a single undoable mark', async ({
+    page,
+  }) => {
+    await demo(page);
+    const stage = page.getByTestId('stage');
+    const paper = (await page.getByTestId('pdf-page').boundingBox())!;
+    const x = Math.round(paper.x + paper.width * 0.25);
+    const y = Math.round(paper.y + paper.height * 0.35);
+    const tip = (dx: number, dy = 0) => ({
+      identifier: 45,
+      clientX: x + dx,
+      clientY: y + dy,
+      touchType: 'stylus',
+      force: 0.25,
+    });
+    await nativeTouch(page, 'touchstart', [tip(0)]);
+    for (const [index, offset] of [3, 7, 2, -4, -2, 0, 4, 5, 1, -3, 0, 0].entries()) {
+      await nativeTouch(page, 'touchmove', [tip((index + 1) * 12, offset)]);
+    }
+
+    await expect(stage).toHaveAttribute('data-shape-snap', 'line');
+    await expect.poll(() => draftAlpha(page, x + 24, y)).toBe(true);
+    expect(await draftAlpha(page, x + 24, y + 7)).toBe(false);
+    expect(await strokes(page)).toHaveLength(0);
+
+    // Safari can report a different position at lift-off. It must not pull the line or add a tail.
+    await nativeTouch(page, 'touchend', [], [tip(175, 35)]);
+    await expect(stage).not.toHaveAttribute('data-shape-snap', 'line');
+    await expect.poll(async () => (await strokes(page)).length).toBe(1);
+    const savedPage = (await stored(page))[0].pages[0];
+    const points = (await strokes(page))[0].points;
+    expect(points).toHaveLength(2);
+    const [first, last] = points;
+    expect(first.y).toBeCloseTo(last.y, 4);
+    expect(((last.x - first.x) / savedPage.width) * paper.width).toBeCloseTo(144, 2);
+    const undo = page.getByRole('button', { name: '元に戻す', exact: true });
+    await undo.click();
+    await expect(undo).toBeDisabled();
+    await expect.poll(async () => (await strokes(page)).length).toBe(0);
+  });
+
+  test('holding an irregular mouse loop previews and persists a true circle', async ({ page }) => {
+    await demo(page);
+    const stage = page.getByTestId('stage');
+    const paper = (await page.getByTestId('pdf-page').boundingBox())!;
+    const x = paper.x + paper.width * 0.5;
+    const y = paper.y + paper.height * 0.45;
+    const radius = 54;
+    await page.mouse.move(x + radius, y);
+    await page.mouse.down();
+    for (let step = 1; step <= 30; step++) {
+      const angle = (step * (2 * Math.PI - 0.11)) / 30;
+      const r = radius + 3 * Math.sin(3 * angle);
+      await page.mouse.move(x + r * Math.cos(angle), y + r * Math.sin(angle));
+    }
+
+    await expect(stage).toHaveAttribute('data-shape-snap', 'circle');
+    await expect.poll(() => draftAlpha(page, x, y + radius, 4)).toBe(true);
+    expect(await draftAlpha(page, x, y)).toBe(false);
+    await page.mouse.up();
+    await expect.poll(async () => (await strokes(page)).length).toBe(1);
+    const saved = (await strokes(page))[0];
+    expect(saved.circle).toBeDefined();
+    const circle = saved.circle!;
+    expect(saved.points.length).toBeGreaterThanOrEqual(16);
+    for (const point of saved.points) {
+      expect(Math.hypot(point.x - circle.x, point.y - circle.y)).toBeCloseTo(circle.radius, 3);
+    }
+    expect(saved.points.at(-1)!.x).toBeCloseTo(saved.points[0].x, 3);
+    expect(saved.points.at(-1)!.y).toBeCloseTo(saved.points[0].y, 3);
+
+    await page.reload();
+    await expect(page.getByTestId('pdf-page')).toBeVisible();
+    expect(await strokes(page)).toEqual([saved]);
+  });
+
+  test('keeps moving, short, and highlighter strokes freehand', async ({ page }) => {
+    await demo(page);
+    const stage = page.getByTestId('stage');
+    const paper = (await page.getByTestId('pdf-page').boundingBox())!;
+    const x = paper.x + paper.width * 0.25;
+    const y = paper.y + paper.height * 0.35;
+
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    for (let step = 1; step <= 8; step++) {
+      // Total contact lasts longer than the hold delay, but the pen keeps moving.
+      await page.waitForTimeout(125);
+      await expect(stage).not.toHaveAttribute('data-shape-snap', /line|circle/);
+      await page.mouse.move(x + step * 16, y + 3 * Math.sin(step));
+    }
+    await expect(stage).not.toHaveAttribute('data-shape-snap', /line|circle/);
+    await page.mouse.up();
+
+    await page.mouse.move(x, y + 35);
+    await page.mouse.down();
+    await page.mouse.move(x + 9, y + 37, { steps: 5 });
+    await page.waitForTimeout(800);
+    await expect(stage).not.toHaveAttribute('data-shape-snap', /line|circle/);
+    await page.mouse.up();
+
+    await page.getByRole('button', { name: '蛍光ペン', exact: true }).click();
+    await page.mouse.move(x, y + 70);
+    await page.mouse.down();
+    await page.mouse.move(x + 144, y + 70, { steps: 12 });
+    await page.waitForTimeout(800);
+    await expect(stage).not.toHaveAttribute('data-shape-snap', /line|circle/);
+    await page.mouse.up();
+
+    await expect.poll(async () => (await strokes(page)).length).toBe(3);
+    const [moving, short, highlighter] = await strokes(page);
+    expect(moving.points.length).toBeGreaterThan(2);
+    expect(short.points.length).toBeGreaterThan(2);
+    expect(highlighter.points.length).toBeGreaterThan(2);
+    expect(highlighter.tool).toBe('highlighter');
+  });
 });
 
 test('light Pencil strokes stay continuous and ink history updates without repainting the whole page', async ({

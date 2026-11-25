@@ -1,5 +1,15 @@
-import { describe, expect, it } from 'vitest';
-import { blankPage, parseYoutubeUrl, pointInPolygon, segmentDistance, strokeHit } from './model';
+import { describe, expect, it, vi } from 'vitest';
+import {
+  blankPage,
+  parseYoutubeUrl,
+  pointInPolygon,
+  segmentDistance,
+  strokeBounds,
+  strokeHit,
+  traceInkPath,
+  transformStroke,
+  type Stroke,
+} from './model';
 import { validateProject } from './storage';
 describe('YouTube URL safety', () => {
   it.each([
@@ -23,6 +33,45 @@ describe('YouTube URL safety', () => {
   ])('rejects %s', (url) => expect(parseYoutubeUrl(url)).toBeNull());
 });
 describe('page-space geometry', () => {
+  it('moves and scales both boundaries of a closed pen circle with its samples', () => {
+    const original: Stroke = {
+      id: 'ring',
+      tool: 'pen',
+      penKind: 'pencil',
+      color: '#445566',
+      width: 4,
+      circle: { x: 10, y: 20, radius: 8 },
+      points: [
+        { x: 18, y: 20, p: 0.5 },
+        { x: 10, y: 28, p: 0.5 },
+      ],
+    };
+    const stroke = transformStroke(original, 2, 3, -5);
+    expect(stroke.circle).toEqual({ x: 23, y: 35, radius: 16 });
+    expect(stroke.width).toBe(8);
+    expect(stroke.points[0]).toEqual({ x: 39, y: 35, p: 0.5 });
+    expect(strokeBounds(stroke)).toEqual({ left: 2, top: 14, right: 44, bottom: 56 });
+    const path = {
+      moveTo: vi.fn(),
+      lineTo: vi.fn(),
+      quadraticCurveTo: vi.fn(),
+      bezierCurveTo: vi.fn(),
+      closePath: vi.fn(),
+    };
+    traceInkPath(path, stroke);
+    expect(path.moveTo.mock.calls).toEqual([
+      [43, 35],
+      [35, 35],
+    ]);
+    expect(path.closePath).toHaveBeenCalledTimes(2);
+    const arcs = path.bezierCurveTo.mock.calls;
+    const perCircle = arcs.length / 2;
+    // The outer curve initially moves downward, the inner curve upward, and both end at the start.
+    expect(arcs[0][1]).toBeGreaterThan(35);
+    expect(arcs[perCircle][1]).toBeLessThan(35);
+    expect(arcs[perCircle - 1].slice(-2)).toEqual([43, 35]);
+    expect(arcs.at(-1)!.slice(-2)).toEqual([35, 35]);
+  });
   it('hits segments between sparse pointer samples', () => {
     expect(
       strokeHit(
@@ -64,6 +113,25 @@ describe('backup validation', () => {
     pages: [blankPage()],
   });
   it('accepts a valid project', () => expect(() => validateProject(valid())).not.toThrow());
+  it('checks the optional circle center and radius in imported pen ink', () => {
+    const project = valid();
+    const stroke: Stroke = {
+      id: 'ring',
+      tool: 'pen',
+      color: '#000000',
+      width: 2,
+      points: [{ x: 18, y: 20, p: 0.5 }],
+      circle: { x: 10, y: 20, radius: 8 },
+    };
+    project.pages[0].strokes = [stroke];
+    expect(() => validateProject(project)).not.toThrow();
+    for (const circle of [null, { x: NaN, y: 20, radius: 8 }, { x: 10, y: 20, radius: 0 }]) {
+      const page = { ...project.pages[0], strokes: [{ ...stroke, circle }] };
+      expect(() => validateProject({ ...project, pages: [page] })).toThrow();
+    }
+    project.pages[0].strokes = [{ ...stroke, tool: 'highlighter' }];
+    expect(() => validateProject(project)).toThrow();
+  });
   it('accepts optional subject and academic year tags and rejects malformed fields', () => {
     expect(() =>
       validateProject({ ...valid(), subject: '物理学', academicYear: '2026' }),

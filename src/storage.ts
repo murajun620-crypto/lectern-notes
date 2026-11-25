@@ -244,6 +244,12 @@ export function validateProject(p: unknown): asserts p is Project {
         typeof s.id !== 'string' ||
         !['pen', 'highlighter'].includes(s.tool) ||
         (s.penKind !== undefined && (s.tool !== 'pen' || !isPenKind(s.penKind))) ||
+        (s.circle !== undefined &&
+          (s.tool !== 'pen' ||
+            !s.circle ||
+            !finite(s.circle.x, -20000, 40000) ||
+            !finite(s.circle.y, -20000, 40000) ||
+            !finite(s.circle.radius, Number.MIN_VALUE, 60000))) ||
         !/^#[0-9a-f]{6}$/i.test(s.color) ||
         !finite(s.width, 0.1, 100) ||
         !Array.isArray(s.points) ||

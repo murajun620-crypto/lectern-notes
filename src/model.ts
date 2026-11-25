@@ -14,6 +14,8 @@ export type Stroke = {
   color: string;
   width: number;
   points: Point[];
+  /** A held pen circle keeps its centerline samples for selection and older readers. */
+  circle?: { x: number; y: number; radius: number };
   erasures?: Erasure[];
 };
 export type Video = {
@@ -116,6 +118,13 @@ export function transformStroke(stroke: Stroke, scale: number, dx: number, dy: n
     ...stroke,
     width: stroke.width * scale,
     points: stroke.points.map(shift),
+    ...(stroke.circle && {
+      circle: {
+        x: stroke.circle.x * scale + dx,
+        y: stroke.circle.y * scale + dy,
+        radius: stroke.circle.radius * scale,
+      },
+    }),
     ...(stroke.erasures && {
       erasures: stroke.erasures.map((e) => ({
         ...e,
@@ -153,7 +162,7 @@ const centerlines = new WeakMap<Stroke, { count: number; points: Point[] }>();
 /** Fill widely spaced curves between contacts while keeping the recorded samples intact. */
 export function strokeCenterline(stroke: Stroke): Point[] {
   const { points, width } = stroke;
-  if (stroke.tool !== 'pen' || points.length < 3) return points;
+  if (stroke.tool !== 'pen' || stroke.circle || points.length < 3) return points;
   const cached = centerlines.get(stroke);
   if (cached?.count === points.length) return cached.points;
   let interpolated: Point[] | undefined;
@@ -266,6 +275,13 @@ const savedInkBounds = new WeakMap<Stroke, InkBounds>();
 export function strokeBounds(stroke: Stroke): InkBounds {
   const cached = savedInkBounds.get(stroke);
   if (cached) return cached;
+  if (stroke.tool === 'pen' && stroke.circle) {
+    const { x, y, radius } = stroke.circle;
+    const reach = radius + stroke.width / 2 + 1;
+    const bounds = { left: x - reach, top: y - reach, right: x + reach, bottom: y + reach };
+    savedInkBounds.set(stroke, bounds);
+    return bounds;
+  }
   let left = Infinity,
     top = Infinity,
     right = -Infinity,
@@ -377,6 +393,12 @@ const emptyInkBounds = () => ({
 export function strokeShape(stroke: Stroke) {
   const count = stroke.points.length;
   const path = new Path2D();
+  if (stroke.tool === 'pen' && stroke.circle) {
+    traceInkPath(path, stroke);
+    strokePaths.set(stroke, { count, path });
+    // Each corrected draft is immutable. Its entire bounds replace the preceding draft.
+    return { path, points: [], bounds: strokeBounds(stroke) };
+  }
   const points =
     stroke.tool === 'pen' ? penOutline(stroke) : stroke.points.map(({ x, y }) => [x, y]);
   const bounds = emptyInkBounds();
@@ -387,16 +409,47 @@ export function strokeShape(stroke: Stroke) {
   return { path, points, bounds };
 }
 
-/** Canvas and PDF use the same smoothed centerline or pressure-bearing outline. */
-export function traceInkPath(
-  path: Pick<Path2D, 'moveTo' | 'lineTo' | 'quadraticCurveTo' | 'closePath'>,
-  stroke: Stroke,
-  outline = stroke.tool === 'pen' ? penOutline(stroke) : [],
-) {
+type InkPath = Pick<
+  Path2D,
+  'moveTo' | 'lineTo' | 'quadraticCurveTo' | 'bezierCurveTo' | 'closePath'
+>;
+
+/** Eight cubic arcs keep even large projected or exported circles smooth at high zoom. */
+function traceCircle(path: InkPath, x: number, y: number, radius: number, reverse: boolean) {
+  const turn = reverse ? -Math.PI / 4 : Math.PI / 4;
+  const tangent = (4 / 3) * Math.tan(turn / 4);
+  let dx = radius;
+  let dy = 0;
+  path.moveTo(x + dx, y);
+  for (let i = 1; i <= 8; i++) {
+    const nx = i === 8 ? radius : radius * Math.cos(i * turn);
+    const ny = i === 8 ? 0 : radius * Math.sin(i * turn);
+    path.bezierCurveTo(
+      x + dx - tangent * dy,
+      y + dy + tangent * dx,
+      x + nx + tangent * ny,
+      y + ny - tangent * nx,
+      x + nx,
+      y + ny,
+    );
+    dx = nx;
+    dy = ny;
+  }
+  path.closePath();
+}
+
+/** Canvas and PDF share the same paths for freehand and corrected ink. */
+export function traceInkPath(path: InkPath, stroke: Stroke, outline?: number[][]) {
   if (stroke.tool === 'highlighter') {
     traceCurve(path, stroke.points);
     if (stroke.points.length === 1) path.lineTo(stroke.points[0].x + 0.01, stroke.points[0].y);
+  } else if (stroke.circle) {
+    const { x, y, radius } = stroke.circle;
+    traceCircle(path, x, y, radius + stroke.width / 2, false);
+    // Opposite winding leaves a hole under the default Canvas and PDF nonzero fills.
+    if (radius > stroke.width / 2) traceCircle(path, x, y, radius - stroke.width / 2, true);
   } else {
+    outline ??= penOutline(stroke);
     if (outline.length) {
       const first = outline[0],
         last = outline.at(-1)!;

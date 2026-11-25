@@ -29,6 +29,7 @@ import PageStackPreview from './PageStackPreview';
 import PDFTextLayer, { hitPdfYoutubeLink } from './PDFTextLayer';
 import { applyErasure } from './eraser';
 import InkSelectionControls from './InkSelectionControls';
+import { detectSnapShape, type SnapShape } from './shape-snap';
 import {
   centerOf,
   hitBounds,
@@ -72,6 +73,7 @@ type PencilContact = {
 const nativePencil = Symbol('native Pencil contact');
 const pdfLinkControls = 'button,a,.video-box,[data-video-control],[data-selection-control]';
 const pdfLinkTapTime = 500;
+const shapeHoldTime = 600;
 type Pinch = { distance: number; zoom: number; mid: Position; anchor: Position };
 const clearPdfSelection = (stage: HTMLElement | null) => {
   const selection = window.getSelection();
@@ -79,6 +81,31 @@ const clearPdfSelection = (stage: HTMLElement | null) => {
 };
 const changeSelection = (strokes: Stroke[], ids: Set<string>, { scale, x, y }: InkTransform) =>
   strokes.map((stroke) => (ids.has(stroke.id) ? transformStroke(stroke, scale, x, y) : stroke));
+
+function snapStroke(stroke: Stroke, shape: SnapShape): Stroke {
+  if (shape.kind === 'line') {
+    return {
+      ...stroke,
+      points: [
+        { ...shape.start, p: 0.5 },
+        { ...shape.end, p: 0.5 },
+      ],
+    };
+  }
+  const { center, radius, startAngle, direction } = shape;
+  // Keep a closed polyline for hit testing and readers that only understand stroke points.
+  const segments = clamp(Math.ceil(Math.PI * Math.sqrt(5 * radius)), 64, 512);
+  const points = Array.from({ length: segments }, (_, i) => {
+    const angle = startAngle + (direction * i * 2 * Math.PI) / segments;
+    return {
+      x: center.x + radius * Math.cos(angle),
+      y: center.y + radius * Math.sin(angle),
+      p: 0.5,
+    };
+  });
+  points.push(points[0]);
+  return { ...stroke, points, circle: { ...center, radius } };
+}
 
 type Props = {
   page: Page;
@@ -246,6 +273,22 @@ export default function Stage({
     pencil?: PencilContact;
     erasure?: { id: string; width: number };
   } | null>(null);
+  type ShapeHold = {
+    gesture: NonNullable<typeof gesture.current>;
+    anchor: Point;
+    pointCount: number;
+    lastMove: number;
+    timer?: ReturnType<typeof setTimeout>;
+    snapped?: Stroke;
+  };
+  const shapeHold = useRef<ShapeHold | null>(null);
+  const clearShapeHold = useCallback(() => {
+    const hold = shapeHold.current;
+    if (!hold) return;
+    clearTimeout(hold.timer);
+    shapeHold.current = null;
+    if (hold.snapped) viewport.current?.removeAttribute('data-shape-snap');
+  }, []);
   const stylusContact = useRef<number | null>(null);
   const nativeLaserContact = useRef<number | null>(null);
   // Do not adopt stale motion from a finished contact or one that started on a control.
@@ -452,6 +495,7 @@ export default function Stage({
   paintPreview.current = paintInk;
   preparingInk.current = preparingLiveInk;
   const clearInkGesture = useCallback(() => {
+    clearShapeHold();
     clearTimeout(pencilFinish.current?.timer);
     pencilFinish.current = null;
     inkPriority.end();
@@ -459,15 +503,79 @@ export default function Stage({
     finishErasure();
     setSelectionPreview(null);
     setLasso((points) => (points.length ? [] : points));
-  }, [inkPriority, clearDraft, finishErasure]);
+  }, [inkPriority, clearDraft, finishErasure, clearShapeHold]);
   useEffect(
     () => () => {
+      clearShapeHold();
       clearTimeout(pencilFinish.current?.timer);
       inkPriority.end();
     },
-    [inkPriority],
+    [inkPriority, clearShapeHold],
   );
   const screenScale = () => fit * view.current.zoom;
+  useLayoutEffect(() => {
+    if (!shapeHold.current) return;
+    if (shapeHold.current.snapped) clearDraft();
+    clearShapeHold();
+  }, [tool, fit, zoom, clearDraft, clearShapeHold]);
+  const scheduleShapeHold = (hold: ShapeHold) => {
+    const check = () => {
+      hold.timer = undefined;
+      const g = hold.gesture;
+      if (
+        shapeHold.current !== hold ||
+        gesture.current !== g ||
+        g.pencil?.touchEnded ||
+        g.pencil?.pointerEnded ||
+        interacting.current
+      )
+        return;
+      const remaining = shapeHoldTime - (performance.now() - hold.lastMove);
+      if (remaining > 0) {
+        hold.timer = setTimeout(check, remaining);
+        return;
+      }
+      const shape = detectSnapShape(g.points.slice(0, hold.pointCount), screenScale());
+      if (!shape) return;
+      hold.snapped = snapStroke(g.stroke!, shape);
+      previewStroke(hold.snapped);
+      viewport.current?.setAttribute('data-shape-snap', shape.kind);
+    };
+    hold.timer = setTimeout(check, shapeHoldTime);
+  };
+  const previewDrawing = (g: NonNullable<typeof gesture.current>) => {
+    const stroke = g.stroke!;
+    if (stroke.tool === 'pen') {
+      const last = g.points.at(-1)!;
+      const hold = shapeHold.current;
+      const scale = screenScale();
+      if (hold?.gesture === g) {
+        const movement = Math.hypot(last.x - hold.anchor.x, last.y - hold.anchor.y) * scale;
+        if (movement >= (hold.snapped ? 7 : 2.5)) {
+          if (hold.snapped) {
+            hold.snapped = undefined;
+            viewport.current?.removeAttribute('data-shape-snap');
+          }
+          hold.anchor = last;
+          hold.pointCount = g.points.length;
+          hold.lastMove = performance.now();
+          if (hold.timer === undefined) scheduleShapeHold(hold);
+        }
+        if (hold.snapped) return;
+      } else if (Math.hypot(last.x - g.start.x, last.y - g.start.y) * scale >= 24) {
+        const next = {
+          gesture: g,
+          anchor: last,
+          pointCount: g.points.length,
+          lastMove: performance.now(),
+        };
+        shapeHold.current = next;
+        scheduleShapeHold(next);
+      }
+    }
+    if (g.pencil) previewPencilStroke(stroke);
+    else previewStroke(stroke);
+  };
   const hideEraser = () => {
     const cursor = eraserCursor.current;
     if (cursor && cursor.style.display !== 'none') cursor.style.display = 'none';
@@ -1070,6 +1178,8 @@ export default function Stage({
   };
   const finishStroke = (g: NonNullable<typeof gesture.current>) => {
     if (gesture.current !== g) return;
+    const hold = shapeHold.current;
+    const stroke = (hold?.gesture === g && hold.snapped) || g.stroke!;
     gesture.current = null;
     if (g.pencil) {
       const { touchId, pointerId, shortTouchEnd } = g.pencil;
@@ -1094,7 +1204,6 @@ export default function Stage({
         palm.current.penUp(nativePencil, now);
       }
     }
-    const stroke = g.stroke!;
     onChange(g.pageId, (prev) => ({ ...prev, strokes: [...prev.strokes, stroke] }));
     clearInkGesture();
   };
@@ -1105,6 +1214,11 @@ export default function Stage({
     waitForShortTouch = false,
   ) => {
     const pencil = g.pencil!;
+    const hold = shapeHold.current;
+    if (hold?.gesture === g) {
+      clearTimeout(hold.timer);
+      hold.timer = undefined;
+    }
     pencil.endAt = Math.min(pencil.endAt ?? Infinity, time);
     if (source === 'pointer') pencil.pointerEnded = true;
     else pencil.touchEnded = true;
@@ -1330,7 +1444,7 @@ export default function Stage({
     if (g.kind === 'draw') {
       if (g.pencil) {
         if (!g.pencil.pointerEnded && !g.pencil.touchEnded && appendPencilSamples(e.nativeEvent, g))
-          previewPencilStroke(g.stroke!);
+          previewDrawing(g);
       } else {
         if (g.deferInkForLink) {
           if (linkPress.current?.pointerId === g.id) return;
@@ -1339,7 +1453,7 @@ export default function Stage({
         }
         const before = g.points.length;
         appendSamples(e, g);
-        if (g.points.length > before) previewStroke(g.stroke!);
+        if (g.points.length > before) previewDrawing(g);
       }
     }
     if (g.kind === 'erase') {
@@ -1649,8 +1763,7 @@ export default function Stage({
         const g = gesture.current;
         if (g?.pencil?.touchId === e.pointerId && !g.pencil.touchEnded) {
           // The matching native stylus contact is stronger evidence than pointerType.
-          if (!g.pencil.pointerEnded && appendPencilSamples(e.nativeEvent, g))
-            previewPencilStroke(g.stroke!);
+          if (!g.pencil.pointerEnded && appendPencilSamples(e.nativeEvent, g)) previewDrawing(g);
           e.preventDefault();
           e.stopPropagation();
         } else if (!palm.current.allowsTouch(e.pointerId)) {
@@ -1929,7 +2042,7 @@ export default function Stage({
               );
             if (!repeatsPointer && appendPencilPoint(g.points, p)) {
               pencil.lastWasTouch = true;
-              previewPencilStroke(g.stroke!);
+              previewDrawing(g);
             }
           }
           return;
