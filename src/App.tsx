@@ -989,6 +989,7 @@ export default function App() {
             (menu as HTMLDetailsElement).open = false;
       }}
     >
+      <div className="standalone-top-background" aria-hidden="true" />
       <input
         hidden
         ref={input}

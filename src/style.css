@@ -2139,11 +2139,34 @@ body,
   overscroll-behavior: none;
 }
 .app {
+  --safe-area-top: env(safe-area-inset-top, 0px);
   --safe-area-bottom: env(safe-area-inset-bottom, 0px);
   height: var(--app-height, 100dvh);
   min-height: 0;
-  padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) var(--safe-area-bottom)
+  padding: var(--safe-area-top) env(safe-area-inset-right, 0px) var(--safe-area-bottom)
     env(safe-area-inset-left, 0px);
+}
+.standalone-top-background {
+  display: none;
+}
+@media (display-mode: standalone) {
+  @supports (-webkit-touch-callout: none) {
+    /* WebKit samples a fixed, opaque top edge for the Home Screen status bar. */
+    .app {
+      --safe-area-top: max(12px, env(safe-area-inset-top, 0px));
+    }
+    .standalone-top-background {
+      display: block;
+      position: fixed;
+      inset: 0 0 auto;
+      height: var(--safe-area-top);
+      background: #f6f7f3;
+      pointer-events: none;
+    }
+    .editor > .standalone-top-background {
+      background: #fff;
+    }
+  }
 }
 .editor.is-footer-hidden {
   padding-bottom: 0;
